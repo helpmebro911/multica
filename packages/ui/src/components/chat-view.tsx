@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { ChatInput } from "@multica/ui/components/chat-input";
@@ -30,9 +30,12 @@ export interface ChatViewProps {
   streamingIds: Set<string>;
   isLoading: boolean;
   isLoadingHistory: boolean;
+  isLoadingMore?: boolean;
+  hasMore?: boolean;
   error: ChatViewError | null;
   pendingApprovals: ChatViewApproval[];
   sendMessage: (text: string) => void;
+  loadMore?: () => void;
   resolveApproval: (approvalId: string, decision: "allow-once" | "allow-always" | "deny") => void;
   onDisconnect?: () => void;
 }
@@ -42,15 +45,76 @@ export function ChatView({
   streamingIds,
   isLoading,
   isLoadingHistory,
+  isLoadingMore = false,
+  hasMore = false,
   error,
   pendingApprovals,
   sendMessage,
+  loadMore,
   resolveApproval,
   onDisconnect,
 }: ChatViewProps) {
   const mainRef = useRef<HTMLElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const fadeStyle = useScrollFade(mainRef);
-  useAutoScroll(mainRef);
+  const { suppressAutoScroll } = useAutoScroll(mainRef);
+
+  // scrollHeight compensation for prepended messages
+  const prevScrollHeightRef = useRef(0);
+  const isPrependingRef = useRef(false);
+  const unlockRef = useRef<(() => void) | null>(null);
+
+  // Snapshot scrollHeight before prepend render
+  const onLoadMore = useCallback(() => {
+    if (!loadMore || !mainRef.current) return;
+    const el = mainRef.current;
+    prevScrollHeightRef.current = el.scrollHeight;
+    isPrependingRef.current = true;
+    // Lock auto-scroll during prepend
+    unlockRef.current = suppressAutoScroll();
+    loadMore();
+  }, [loadMore, suppressAutoScroll]);
+
+  // After messages change, compensate scroll position if we just prepended
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el || !isPrependingRef.current) return;
+
+    isPrependingRef.current = false;
+
+    // Double-rAF ensures DOM layout is complete before compensating
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const newScrollHeight = el.scrollHeight;
+        const heightDiff = newScrollHeight - prevScrollHeightRef.current;
+        if (heightDiff > 0) {
+          el.scrollTop = el.scrollTop + heightDiff;
+        }
+        // Release auto-scroll lock after position is restored
+        unlockRef.current?.();
+        unlockRef.current = null;
+      });
+    });
+  }, [messages]);
+
+  // IntersectionObserver to trigger loadMore when sentinel is visible
+  // Skip during initial history load to avoid premature triggering
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || isLoadingHistory) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore && !isLoadingMore) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "100px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, isLoadingMore, isLoadingHistory, onLoadMore]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -122,6 +186,15 @@ export function ChatView({
           </div>
         ) : (
           <>
+            {/* Sentinel element for IntersectionObserver load-more trigger */}
+            <div ref={sentinelRef} className="h-px shrink-0" />
+            {isLoadingMore && (
+              <div className="flex justify-center py-3">
+                <div className="text-xs text-muted-foreground animate-pulse">
+                  Loading older messages...
+                </div>
+              </div>
+            )}
             <MessageList messages={messages} streamingIds={streamingIds} />
             {pendingApprovals.length > 0 && (
               <div className="relative px-4 max-w-4xl mx-auto">

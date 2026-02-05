@@ -15,6 +15,7 @@ export {
   isResponseSuccess,
   isResponseError,
   type AgentMessageItem,
+  DEFAULT_MESSAGES_LIMIT,
   type GetAgentMessagesParams,
   type GetAgentMessagesResult,
   type GetHubInfoResult,

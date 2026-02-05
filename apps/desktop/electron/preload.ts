@@ -207,8 +207,9 @@ const electronAPI = {
     subscribe: (agentId: string) => ipcRenderer.invoke('localChat:subscribe', agentId),
     /** Unsubscribe from agent events */
     unsubscribe: (agentId: string) => ipcRenderer.invoke('localChat:unsubscribe', agentId),
-    /** Get message history for local chat (returns raw AgentMessageItem[]) */
-    getHistory: (agentId: string) => ipcRenderer.invoke('localChat:getHistory', agentId),
+    /** Get message history for local chat with pagination (returns raw AgentMessageItem[]) */
+    getHistory: (agentId: string, options?: { offset?: number; limit?: number }) =>
+      ipcRenderer.invoke('localChat:getHistory', agentId, options),
     /** Send message to agent via direct IPC (no Gateway) */
     send: (agentId: string, content: string) => ipcRenderer.invoke('localChat:send', agentId, content),
     /** Resolve an exec approval request */

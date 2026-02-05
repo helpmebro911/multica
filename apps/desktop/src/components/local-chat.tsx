@@ -10,9 +10,12 @@ export function LocalChat() {
     streamingIds,
     isLoading,
     isLoadingHistory,
+    isLoadingMore,
+    hasMore,
     error,
     pendingApprovals,
     sendMessage,
+    loadMore,
     resolveApproval,
   } = useLocalChat()
 
@@ -39,9 +42,12 @@ export function LocalChat() {
       streamingIds={streamingIds}
       isLoading={isLoading}
       isLoadingHistory={isLoadingHistory}
+      isLoadingMore={isLoadingMore}
+      hasMore={hasMore}
       error={error}
       pendingApprovals={pendingApprovals}
       sendMessage={sendMessage}
+      loadMore={loadMore}
       resolveApproval={resolveApproval}
     />
   )

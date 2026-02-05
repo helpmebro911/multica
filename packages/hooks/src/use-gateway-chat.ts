@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   type GatewayClient,
   type StreamPayload,
   type GetAgentMessagesResult,
   type ExecApprovalRequestPayload,
   type ApprovalDecision,
+  DEFAULT_MESSAGES_LIMIT,
   StreamAction,
   ExecApprovalRequestAction,
 } from "@multica/sdk";
@@ -22,12 +23,24 @@ export function useGatewayChat({ client, hubId, agentId }: UseGatewayChatOptions
   const chat = useChat();
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const isLoadingMoreRef = useRef(false);
+  const offsetRef = useRef<number | null>(null);
 
-  // Fetch history
+  // Fetch latest messages on mount
   useEffect(() => {
     client
-      .request<GetAgentMessagesResult>(hubId, "getAgentMessages", { agentId, limit: 200 })
-      .then((result) => chat.setHistory(result.messages, agentId))
+      .request<GetAgentMessagesResult>(hubId, "getAgentMessages", {
+        agentId,
+        limit: DEFAULT_MESSAGES_LIMIT,
+      })
+      .then((result) => {
+        chat.setHistory(result.messages, agentId, {
+          total: result.total,
+          offset: result.offset,
+        });
+        offsetRef.current = result.offset;
+      })
       .catch(() => {})
       .finally(() => setIsLoadingHistory(false));
   }, [client, hubId, agentId]);
@@ -66,6 +79,31 @@ export function useGatewayChat({ client, hubId, agentId }: UseGatewayChatOptions
     [client, hubId, agentId],
   );
 
+  const loadMore = useCallback(async () => {
+    const currentOffset = offsetRef.current;
+    if (currentOffset == null || currentOffset <= 0 || isLoadingMoreRef.current) return;
+
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const newOffset = Math.max(0, currentOffset - DEFAULT_MESSAGES_LIMIT);
+      const limit = currentOffset - newOffset;
+      const result = await client.request<GetAgentMessagesResult>(
+        hubId, "getAgentMessages", { agentId, offset: newOffset, limit },
+      );
+      chat.prependHistory(result.messages, agentId, {
+        total: result.total,
+        offset: result.offset,
+      });
+      offsetRef.current = result.offset;
+    } catch {
+      // Best-effort — pagination failure does not block chat
+    } finally {
+      isLoadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [client, hubId, agentId]);
+
   const resolveApproval = useCallback(
     (approvalId: string, decision: ApprovalDecision) => {
       chat.removeApproval(approvalId);
@@ -79,9 +117,12 @@ export function useGatewayChat({ client, hubId, agentId }: UseGatewayChatOptions
     streamingIds: chat.streamingIds,
     isLoading,
     isLoadingHistory,
+    isLoadingMore,
+    hasMore: chat.hasMore,
     error: chat.error,
     pendingApprovals: chat.pendingApprovals,
     sendMessage,
+    loadMore,
     resolveApproval,
   };
 }

@@ -64,11 +64,12 @@ export function useChat() {
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<ChatError | null>(null);
+  const [hasMore, setHasMore] = useState(false);
 
   const isStreaming = streamingIds.size > 0;
 
-  /** Load history: convert raw AgentMessageItem[] → Message[] */
-  const setHistory = useCallback((raw: AgentMessageItem[], agentId: string) => {
+  /** Convert raw AgentMessageItem[] → Message[] */
+  const convertMessages = useCallback((raw: AgentMessageItem[], agentId: string): Message[] => {
     const toolCallArgsMap = new Map<string, { name: string; args: Record<string, unknown> }>();
     for (const m of raw) {
       if (m.role === "assistant") {
@@ -101,9 +102,24 @@ export function useChat() {
         });
       }
     }
-
-    setMessages(loaded);
+    return loaded;
   }, []);
+
+  /** Load initial history (replaces all messages) */
+  const setHistory = useCallback((raw: AgentMessageItem[], agentId: string, meta?: { total: number; offset: number }) => {
+    const loaded = convertMessages(raw, agentId);
+    setMessages(loaded);
+    if (meta) {
+      setHasMore(meta.offset > 0);
+    }
+  }, [convertMessages]);
+
+  /** Prepend older messages (for "load more" pagination) */
+  const prependHistory = useCallback((raw: AgentMessageItem[], agentId: string, meta: { total: number; offset: number }) => {
+    const older = convertMessages(raw, agentId);
+    setMessages((prev) => [...older, ...prev]);
+    setHasMore(meta.offset > 0);
+  }, [convertMessages]);
 
   /** Add a user message */
   const addUserMessage = useCallback((text: string, agentId: string) => {
@@ -217,11 +233,13 @@ export function useChat() {
     messages,
     streamingIds,
     isStreaming,
+    hasMore,
     pendingApprovals,
     error,
     // State control (for transport layer to call)
     setError,
     setHistory,
+    prependHistory,
     addUserMessage,
     handleStream,
     addApproval,

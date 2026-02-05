@@ -340,23 +340,28 @@ export function registerHubIpcHandlers(): void {
   })
 
   /**
-   * Get message history for local chat.
+   * Get message history for local chat with pagination.
    * Returns raw AgentMessageItem[] so the renderer can render content blocks,
    * tool results, thinking blocks, etc. — same format as the Gateway RPC.
    */
-  ipcMain.handle('localChat:getHistory', async (_event, agentId: string) => {
+  ipcMain.handle('localChat:getHistory', async (_event, agentId: string, options?: { offset?: number; limit?: number }) => {
     const h = getHub()
     const agent = h.getAgent(agentId)
     if (!agent) {
-      return { messages: [] }
+      return { messages: [], total: 0, offset: 0, limit: 0 }
     }
 
     try {
       await agent.ensureInitialized()
-      const messages = agent.getMessages()
-      return { messages }
+      const allMessages = agent.getMessages()
+      const total = allMessages.length
+      // Must match DEFAULT_MESSAGES_LIMIT from @multica/sdk/actions/rpc
+      const limit = options?.limit ?? 200
+      const offset = options?.offset ?? Math.max(0, total - limit)
+      const sliced = allMessages.slice(offset, offset + limit)
+      return { messages: sliced, total, offset, limit }
     } catch {
-      return { messages: [] }
+      return { messages: [], total: 0, offset: 0, limit: 0 }
     }
   })
 

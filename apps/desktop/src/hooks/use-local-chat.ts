@@ -4,7 +4,9 @@ import type {
   StreamPayload,
   ExecApprovalRequestPayload,
   ApprovalDecision,
+  AgentMessageItem,
 } from '@multica/sdk'
+import { DEFAULT_MESSAGES_LIMIT } from '@multica/sdk'
 
 export function useLocalChat() {
   const chat = useChat()
@@ -13,8 +15,11 @@ export function useLocalChat() {
   const [agentId, setAgentId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const isLoadingMoreRef = useRef(false)
   const [initError, setInitError] = useState<string | null>(null)
   const initRef = useRef(false)
+  const offsetRef = useRef<number | null>(null)
 
   // Initialize hub and get default agent ID
   useEffect(() => {
@@ -61,12 +66,16 @@ export function useLocalChat() {
       chatRef.current.addApproval(approval as ExecApprovalRequestPayload)
     })
 
-    // Fetch history
-    window.electronAPI.localChat.getHistory(agentId)
+    // Fetch history with pagination
+    window.electronAPI.localChat.getHistory(agentId, { limit: DEFAULT_MESSAGES_LIMIT })
       .then((result) => {
-        console.log('[LocalChat] getHistory result:', result.messages?.length, 'messages, sample:', result.messages?.[0])
+        console.log('[LocalChat] getHistory result:', result.messages?.length, 'messages, total:', result.total)
         if (result.messages?.length) {
-          chatRef.current.setHistory(result.messages as never[], agentId)
+          chatRef.current.setHistory(result.messages as AgentMessageItem[], agentId, {
+            total: result.total,
+            offset: result.offset,
+          })
+          offsetRef.current = result.offset
         }
       })
       .catch(() => {})
@@ -91,6 +100,31 @@ export function useLocalChat() {
     [agentId],
   )
 
+  const loadMore = useCallback(async () => {
+    const currentOffset = offsetRef.current
+    if (!agentId || currentOffset == null || currentOffset <= 0 || isLoadingMoreRef.current) return
+
+    isLoadingMoreRef.current = true
+    setIsLoadingMore(true)
+    try {
+      const newOffset = Math.max(0, currentOffset - DEFAULT_MESSAGES_LIMIT)
+      const limit = currentOffset - newOffset
+      const result = await window.electronAPI.localChat.getHistory(agentId, { offset: newOffset, limit })
+      if (result.messages?.length) {
+        chatRef.current.prependHistory(result.messages as AgentMessageItem[], agentId, {
+          total: result.total,
+          offset: result.offset,
+        })
+        offsetRef.current = result.offset
+      }
+    } catch {
+      // Best-effort — pagination failure does not block chat
+    } finally {
+      isLoadingMoreRef.current = false
+      setIsLoadingMore(false)
+    }
+  }, [agentId])
+
   const resolveApproval = useCallback(
     (approvalId: string, decision: ApprovalDecision) => {
       chatRef.current.removeApproval(approvalId)
@@ -106,9 +140,12 @@ export function useLocalChat() {
     streamingIds: chat.streamingIds,
     isLoading,
     isLoadingHistory,
+    isLoadingMore,
+    hasMore: chat.hasMore,
     error: chat.error,
     pendingApprovals: chat.pendingApprovals,
     sendMessage,
+    loadMore,
     resolveApproval,
   }
 }
