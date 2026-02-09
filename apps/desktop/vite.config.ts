@@ -38,6 +38,7 @@ export default defineConfig({
                 '@mariozechner/pi-agent-core',
                 '@mariozechner/pi-ai',
                 '@mariozechner/pi-coding-agent',
+                'grammy',
               ],
             },
           },
