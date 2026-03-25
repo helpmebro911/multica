@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type WorkspaceResponse struct {
@@ -207,6 +208,9 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := requestUserID(r)
+	h.publish(protocol.EventWorkspaceUpdated, id, "member", userID, map[string]any{"workspace": workspaceToResponse(ws)})
+
 	writeJSON(w, http.StatusOK, workspaceToResponse(ws))
 }
 
@@ -334,11 +338,19 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Queries.GetUserByEmail(r.Context(), email)
 	if err != nil {
 		if isNotFound(err) {
-			writeError(w, http.StatusNotFound, "user not found")
+			// Auto-create user with email so they can be invited before signing up
+			user, err = h.Queries.CreateUser(r.Context(), db.CreateUserParams{
+				Name:  email,
+				Email: email,
+			})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create user")
+				return
+			}
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to load user")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
 	}
 
 	member, err := h.Queries.CreateMember(r.Context(), db.CreateMemberParams{
@@ -354,6 +366,9 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create member")
 		return
 	}
+
+	userID := requestUserID(r)
+	h.publish(protocol.EventMemberAdded, workspaceID, "member", userID, map[string]any{"member": memberWithUserResponse(member, user)})
 
 	writeJSON(w, http.StatusCreated, memberWithUserResponse(member, user))
 }
@@ -424,6 +439,11 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := requestUserID(r)
+	h.publish(protocol.EventMemberUpdated, workspaceID, "member", userID, map[string]any{
+		"member": memberWithUserResponse(updatedMember, user),
+	})
+
 	writeJSON(w, http.StatusOK, memberWithUserResponse(updatedMember, user))
 }
 
@@ -463,6 +483,13 @@ func (h *Handler) DeleteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := requestUserID(r)
+	h.publish(protocol.EventMemberRemoved, workspaceID, "member", userID, map[string]any{
+		"member_id":    uuidToString(target.ID),
+		"workspace_id": workspaceID,
+		"user_id":      uuidToString(target.UserID),
+	})
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -490,6 +517,13 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := requestUserID(r)
+	h.publish(protocol.EventMemberRemoved, workspaceID, "member", userID, map[string]any{
+		"member_id":    uuidToString(member.ID),
+		"workspace_id": workspaceID,
+		"user_id":      uuidToString(member.UserID),
+	})
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -503,6 +537,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return
 	}
+
+	h.publish(protocol.EventWorkspaceDeleted, workspaceID, "member", requestUserID(r), map[string]any{
+		"workspace_id": workspaceID,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

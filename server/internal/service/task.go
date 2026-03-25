@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -17,10 +18,11 @@ import (
 type TaskService struct {
 	Queries *db.Queries
 	Hub     *realtime.Hub
+	Bus     *events.Bus
 }
 
-func NewTaskService(q *db.Queries, hub *realtime.Hub) *TaskService {
-	return &TaskService{Queries: q, Hub: hub}
+func NewTaskService(q *db.Queries, hub *realtime.Hub, bus *events.Bus) *TaskService {
+	return &TaskService{Queries: q, Hub: hub, Bus: bus}
 }
 
 // EnqueueTaskForIssue creates a task with a context snapshot of the issue.
@@ -101,7 +103,7 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 	s.updateAgentStatus(ctx, agentID, "working")
 
 	// Broadcast task:dispatch
-	s.broadcastTaskDispatch(task)
+	s.broadcastTaskDispatch(ctx, task)
 
 	return &task, nil
 }
@@ -187,7 +189,7 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	s.ReconcileAgentStatus(ctx, task.AgentID)
 
 	// Broadcast
-	s.broadcastTaskEvent(protocol.EventTaskCompleted, task)
+	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
 	return &task, nil
 }
@@ -221,18 +223,24 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg s
 	s.ReconcileAgentStatus(ctx, task.AgentID)
 
 	// Broadcast
-	s.broadcastTaskEvent(protocol.EventTaskFailed, task)
+	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
 
 	return &task, nil
 }
 
-// ReportProgress broadcasts a progress update via WebSocket.
-func (s *TaskService) ReportProgress(taskID string, summary string, step, total int) {
-	s.broadcast(protocol.EventTaskProgress, protocol.TaskProgressPayload{
-		TaskID:  taskID,
-		Summary: summary,
-		Step:    step,
-		Total:   total,
+// ReportProgress broadcasts a progress update via the event bus.
+func (s *TaskService) ReportProgress(ctx context.Context, taskID string, workspaceID string, summary string, step, total int) {
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventTaskProgress,
+		WorkspaceID: workspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload: protocol.TaskProgressPayload{
+			TaskID:  taskID,
+			Summary: summary,
+			Step:    step,
+			Total:   total,
+		},
 	})
 }
 
@@ -257,7 +265,13 @@ func (s *TaskService) updateAgentStatus(ctx context.Context, agentID pgtype.UUID
 	if err != nil {
 		return
 	}
-	s.broadcast(protocol.EventAgentStatus, map[string]any{"agent": agentToMap(agent)})
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventAgentStatus,
+		WorkspaceID: util.UUIDToString(agent.WorkspaceID),
+		ActorType:   "system",
+		ActorID:     "",
+		Payload:     map[string]any{"agent": agentToMap(agent)},
+	})
 }
 
 type skillSnapshot struct {
@@ -351,7 +365,7 @@ func priorityToInt(p string) int32 {
 	}
 }
 
-func (s *TaskService) broadcastTaskDispatch(task db.AgentTaskQueue) {
+func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTaskQueue) {
 	var payload map[string]any
 	if task.Context != nil {
 		json.Unmarshal(task.Context, &payload)
@@ -361,33 +375,46 @@ func (s *TaskService) broadcastTaskDispatch(task db.AgentTaskQueue) {
 	}
 	payload["task_id"] = util.UUIDToString(task.ID)
 	payload["runtime_id"] = util.UUIDToString(task.RuntimeID)
-	s.broadcast(protocol.EventTaskDispatch, payload)
-}
 
-func (s *TaskService) broadcastTaskEvent(eventType string, task db.AgentTaskQueue) {
-	s.broadcast(eventType, map[string]any{
-		"task_id":  util.UUIDToString(task.ID),
-		"agent_id": util.UUIDToString(task.AgentID),
-		"issue_id": util.UUIDToString(task.IssueID),
-		"status":   task.Status,
+	workspaceID := ""
+	if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+		workspaceID = util.UUIDToString(issue.WorkspaceID)
+	}
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventTaskDispatch,
+		WorkspaceID: workspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload:     payload,
 	})
 }
 
-func (s *TaskService) broadcast(eventType string, payload any) {
-	msg := map[string]any{
-		"type":    eventType,
-		"payload": payload,
+func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, task db.AgentTaskQueue) {
+	workspaceID := ""
+	if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
+		workspaceID = util.UUIDToString(issue.WorkspaceID)
 	}
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-	s.Hub.Broadcast(data)
+	s.Bus.Publish(events.Event{
+		Type:        eventType,
+		WorkspaceID: workspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload: map[string]any{
+			"task_id":  util.UUIDToString(task.ID),
+			"agent_id": util.UUIDToString(task.AgentID),
+			"issue_id": util.UUIDToString(task.IssueID),
+			"status":   task.Status,
+		},
+	})
 }
 
 func (s *TaskService) broadcastIssueUpdated(issue db.Issue) {
-	s.broadcast(protocol.EventIssueUpdated, map[string]any{
-		"issue": issueToMap(issue),
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+		ActorType:   "system",
+		ActorID:     "",
+		Payload:     map[string]any{"issue": issueToMap(issue)},
 	})
 }
 
@@ -395,12 +422,37 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 	if content == "" {
 		return
 	}
-	s.Queries.CreateComment(ctx, db.CreateCommentParams{
+	comment, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
 		IssueID:    issueID,
 		AuthorType: "agent",
 		AuthorID:   agentID,
 		Content:    content,
 		Type:       commentType,
+	})
+	if err != nil {
+		return
+	}
+	// Look up issue to get workspace ID for broadcasting
+	issue, err := s.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return
+	}
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+		ActorType:   "agent",
+		ActorID:     util.UUIDToString(agentID),
+		Payload: map[string]any{
+			"comment": map[string]any{
+				"id":          util.UUIDToString(comment.ID),
+				"issue_id":    util.UUIDToString(comment.IssueID),
+				"author_type": comment.AuthorType,
+				"author_id":   util.UUIDToString(comment.AuthorID),
+				"content":     comment.Content,
+				"type":        comment.Type,
+				"created_at":  comment.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
+			},
+		},
 	})
 }
 
@@ -421,8 +473,12 @@ func (s *TaskService) createInboxForIssueCreator(ctx context.Context, issue db.I
 	if err != nil {
 		return
 	}
-	s.broadcast(protocol.EventInboxNew, map[string]any{
-		"item": inboxToMap(item),
+	s.Bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+		ActorType:   "system",
+		ActorID:     "",
+		Payload:     map[string]any{"item": inboxToMap(item)},
 	})
 }
 

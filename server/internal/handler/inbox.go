@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type InboxItemResponse struct {
@@ -88,6 +89,14 @@ func (h *Handler) MarkInboxRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to mark read")
 		return
 	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(item.WorkspaceID)
+	h.publish(protocol.EventInboxRead, workspaceID, "member", userID, map[string]any{
+		"item_id":      uuidToString(item.ID),
+		"recipient_id": uuidToString(item.RecipientID),
+	})
+
 	writeJSON(w, http.StatusOK, inboxToResponse(item))
 }
 
@@ -101,5 +110,31 @@ func (h *Handler) ArchiveInboxItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to archive")
 		return
 	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(item.WorkspaceID)
+	h.publish(protocol.EventInboxArchived, workspaceID, "member", userID, map[string]any{
+		"item_id":      uuidToString(item.ID),
+		"recipient_id": uuidToString(item.RecipientID),
+	})
+
 	writeJSON(w, http.StatusOK, inboxToResponse(item))
+}
+
+func (h *Handler) CountUnreadInbox(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	count, err := h.Queries.CountUnreadInbox(r.Context(), db.CountUnreadInboxParams{
+		RecipientType: "member",
+		RecipientID:   parseUUID(userID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count unread inbox")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int64{"count": count})
 }

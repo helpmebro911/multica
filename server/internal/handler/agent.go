@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type AgentResponse struct {
@@ -119,7 +123,8 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 
 func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
-	if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found"); !ok {
+	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
+	if !ok {
 		return
 	}
 
@@ -128,6 +133,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
+
+	userID := requestUserID(r)
+	isAdmin := roleAllowed(member.Role, "owner", "admin")
 
 	// Batch-load skills for all agents to avoid N+1.
 	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(r.Context(), parseUUID(workspaceID))
@@ -145,15 +153,23 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	resp := make([]AgentResponse, len(agents))
-	for i, a := range agents {
-		resp[i] = agentToResponse(a)
-		if skills, ok := skillMap[resp[i].ID]; ok {
-			resp[i].Skills = skills
+	// Filter private agents: only visible to owner_id or workspace admin
+	var visible []AgentResponse
+	for _, a := range agents {
+		if a.Visibility == "private" && !isAdmin && uuidToString(a.OwnerID) != userID {
+			continue
 		}
+		resp := agentToResponse(a)
+		if skills, ok := skillMap[resp.ID]; ok {
+			resp.Skills = skills
+		}
+		visible = append(visible, resp)
+	}
+	if visible == nil {
+		visible = []AgentResponse{}
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, visible)
 }
 
 func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
@@ -269,8 +285,56 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		agent, _ = h.Queries.GetAgent(r.Context(), agent.ID)
 	}
 
-	writeJSON(w, http.StatusCreated, agentToResponse(agent))
+	// Best-effort: create an initialization issue assigned to the new agent.
+	h.createAgentInitIssue(r.Context(), agent, parseUUID(ownerID))
+
+	resp := agentToResponse(agent)
+	h.publish(protocol.EventAgentCreated, workspaceID, "member", ownerID, map[string]any{"agent": resp})
+	writeJSON(w, http.StatusCreated, resp)
 }
+
+// createAgentInitIssue creates an initialization issue assigned to a newly created agent.
+// It incorporates workspace context so the agent can set up its environment.
+// Failures are silently ignored — the agent creation itself has already succeeded.
+func (h *Handler) createAgentInitIssue(ctx context.Context, agent db.Agent, creatorID pgtype.UUID) {
+	ws, err := h.Queries.GetWorkspace(ctx, agent.WorkspaceID)
+	if err != nil {
+		return
+	}
+
+	var desc string
+	if ws.Context.Valid && ws.Context.String != "" {
+		desc = fmt.Sprintf("Initialize the development environment for agent **%s**.\n\n## Workspace Context\n\n%s\n\n## Instructions\n\n- Set up the local development environment based on the workspace context above\n- Clone and configure any referenced repositories\n- Verify access to the codebase and tools\n- Report back on what was set up and any issues encountered", agent.Name, ws.Context.String)
+	} else {
+		desc = fmt.Sprintf("Initialize the development environment for agent **%s**.\n\n## Instructions\n\n- Explore the local working directory and understand the project structure\n- Verify access to the codebase and tools\n- Report back on what was found and any issues encountered", agent.Name)
+	}
+
+	issue, err := h.Queries.CreateIssue(ctx, db.CreateIssueParams{
+		WorkspaceID:        agent.WorkspaceID,
+		Title:              "Initialize environment for " + agent.Name,
+		Description:        strToText(desc),
+		Status:             "todo",
+		Priority:           "medium",
+		AssigneeType:       pgtype.Text{String: "agent", Valid: true},
+		AssigneeID:         agent.ID,
+		CreatorType:        "member",
+		CreatorID:          creatorID,
+		AcceptanceCriteria: []byte("[]"),
+		ContextRefs:        []byte("[]"),
+		Position:           0,
+	})
+	if err != nil {
+		return
+	}
+
+	h.publish(protocol.EventIssueCreated, uuidToString(agent.WorkspaceID), "system", "", map[string]any{"issue": issueToResponse(issue)})
+
+	// Enqueue the task directly — we know the agent is assigned and status is "todo".
+	if _, err := h.TaskService.EnqueueTaskForIssue(ctx, issue); err != nil {
+		log.Printf("createAgentInitIssue: enqueue task failed for issue %s: %v", issue.Title, err)
+	}
+}
+
 
 type UpdateAgentRequest struct {
 	Name               *string `json:"name"`
@@ -354,22 +418,41 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := agentToResponse(agent)
-	h.broadcast("agent:status", map[string]any{"agent": resp})
+	userID := requestUserID(r)
+	h.publish(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), "member", userID, map[string]any{"agent": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, id)
+	if !ok {
+		return
+	}
+	wsID := uuidToString(agent.WorkspaceID)
+
+	// Require owner or admin role
+	if _, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin"); !ok {
+		return
+	}
+
 	err := h.Queries.DeleteAgent(r.Context(), parseUUID(id))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete agent")
 		return
 	}
+
+	userID := requestUserID(r)
+	h.publish(protocol.EventAgentDeleted, wsID, "member", userID, map[string]any{"agent_id": id, "workspace_id": wsID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if _, ok := h.loadAgentForUser(w, r, id); !ok {
+		return
+	}
+
 	tasks, err := h.Queries.ListAgentTasks(r.Context(), parseUUID(id))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")

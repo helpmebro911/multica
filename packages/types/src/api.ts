@@ -1,5 +1,5 @@
-import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue.js";
-import type { MemberRole } from "./workspace.js";
+import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+import type { MemberRole } from "./workspace";
 
 // Issue API
 export interface CreateIssueRequest {

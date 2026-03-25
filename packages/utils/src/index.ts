@@ -1,1 +1,1 @@
-export { formatDate, relativeTime } from "./date.js";
+export { formatDate, relativeTime } from "./date";

@@ -37,14 +37,15 @@ apps/web/
 |---|---|---|
 | `features/auth/` | Authentication state | `useAuthStore`, `AuthInitializer` |
 | `features/workspace/` | Workspace, members, agents | `useWorkspaceStore`, `useActorName` |
-| `features/issues/` | Issue components and config | Icons, pickers, status/priority config |
-| `features/realtime/` | WebSocket connection | `WSProvider`, `useWSEvent` |
+| `features/issues/` | Issue state, components, config | `useIssueStore`, icons, pickers, status/priority config |
+| `features/inbox/` | Inbox notification state | `useInboxStore` |
+| `features/realtime/` | WebSocket connection + sync | `WSProvider`, `useWSEvent`, `useRealtimeSync` |
 
 **`shared/`** — Code used across multiple features. Currently only `api.ts` (SDK singleton).
 
 ### State Management
 
-- **Zustand** for global client state (`features/auth/store.ts`, `features/workspace/store.ts`).
+- **Zustand** for global client state — one store per feature domain (`features/auth/store.ts`, `features/workspace/store.ts`, `features/issues/store.ts`, `features/inbox/store.ts`).
 - **React Context** only for connection lifecycle (`WSProvider` in `features/realtime/`).
 - **Local `useState`** for component-scoped UI state (forms, modals, filters).
 - Do not use React Context for data that can be a zustand store.
@@ -62,6 +63,8 @@ Use `@/` alias (maps to `apps/web/`):
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
+import { useIssueStore } from "@/features/issues";
+import { useInboxStore } from "@/features/inbox";
 import { useWSEvent } from "@/features/realtime";
 import { StatusIcon } from "@/features/issues/components";
 ```
@@ -92,9 +95,7 @@ Browser ← WSClient (SDK) ← WebSocket ← Hub.Broadcast() ← Handlers/TaskSe
 
 - **`@multica/sdk`**: `ApiClient` (REST) and `WSClient` (WebSocket) classes. All backend communication goes through here.
 - **`@multica/types`**: Shared domain types + WebSocket event types (issue:created/updated/deleted, task:*, agent:status, comment:*, inbox:new, daemon:*).
-- **`@multica/store`**: Zustand stores — simple arrays with add/update/remove. No persistence; memory only.
 - **`@multica/ui`**: shadcn/ui component library with Radix primitives, Tailwind CSS 4, Shiki syntax highlighting for markdown.
-- **`@multica/hooks`**: `useRealtime()` (WS → store sync), `useIssues()`, `useAgents()`, `useInbox()` (fetch + cache).
 
 ### Multi-tenancy
 

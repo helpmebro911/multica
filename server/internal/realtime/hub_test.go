@@ -1,23 +1,49 @@
 package realtime
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/auth"
 )
+
+const testWorkspaceID = "test-workspace"
+const testUserID = "test-user"
+
+// mockMembershipChecker always returns true.
+type mockMembershipChecker struct{}
+
+func (m *mockMembershipChecker) IsMember(_ context.Context, _, _ string) bool {
+	return true
+}
+
+func makeTestToken(t *testing.T) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": testUserID,
+	})
+	signed, err := token.SignedString(auth.JWTSecret())
+	if err != nil {
+		t.Fatalf("failed to sign test JWT: %v", err)
+	}
+	return signed
+}
 
 func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
 	t.Helper()
 	hub := NewHub()
 	go hub.Run()
 
+	mc := &mockMembershipChecker{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		HandleWebSocket(hub, w, r)
+		HandleWebSocket(hub, mc, w, r)
 	})
 	server := httptest.NewServer(mux)
 	return hub, server
@@ -25,12 +51,24 @@ func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
 
 func connectWS(t *testing.T, server *httptest.Server) *websocket.Conn {
 	t.Helper()
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	token := makeTestToken(t)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws?token=" + token + "&workspace_id=" + testWorkspaceID
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("failed to connect WebSocket: %v", err)
 	}
 	return conn
+}
+
+// totalClients counts all clients across all rooms.
+func totalClients(hub *Hub) int {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	count := 0
+	for _, clients := range hub.rooms {
+		count += len(clients)
+	}
+	return count
 }
 
 func TestHub_ClientRegistration(t *testing.T) {
@@ -42,10 +80,7 @@ func TestHub_ClientRegistration(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	hub.mu.RLock()
-	count := len(hub.clients)
-	hub.mu.RUnlock()
-
+	count := totalClients(hub)
 	if count != 1 {
 		t.Fatalf("expected 1 client, got %d", count)
 	}
@@ -92,9 +127,7 @@ func TestHub_ClientDisconnect(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	hub.mu.RLock()
-	countBefore := len(hub.clients)
-	hub.mu.RUnlock()
+	countBefore := totalClients(hub)
 	if countBefore != 1 {
 		t.Fatalf("expected 1 client before disconnect, got %d", countBefore)
 	}
@@ -102,9 +135,7 @@ func TestHub_ClientDisconnect(t *testing.T) {
 	conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	hub.mu.RLock()
-	countAfter := len(hub.clients)
-	hub.mu.RUnlock()
+	countAfter := totalClients(hub)
 	if countAfter != 0 {
 		t.Fatalf("expected 0 clients after disconnect, got %d", countAfter)
 	}
@@ -123,9 +154,7 @@ func TestHub_BroadcastToMultipleClients(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	hub.mu.RLock()
-	count := len(hub.clients)
-	hub.mu.RUnlock()
+	count := totalClients(hub)
 	if count != numClients {
 		t.Fatalf("expected %d clients, got %d", numClients, count)
 	}

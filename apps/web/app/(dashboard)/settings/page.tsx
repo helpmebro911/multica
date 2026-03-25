@@ -8,12 +8,23 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectTrigger,
   SelectValue,
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
+import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
@@ -108,16 +119,17 @@ export default function SettingsPage() {
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url ?? "");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [profileSaved, setProfileSaved] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<MemberRole>("member");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [memberActionId, setMemberActionId] = useState<string | null>(null);
-  const [workspaceError, setWorkspaceError] = useState("");
-  const [profileError, setProfileError] = useState("");
-  const [memberError, setMemberError] = useState("");
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    description: string;
+    variant?: "destructive";
+    onConfirm: () => Promise<void>;
+  } | null>(null);
   const currentMember = members.find((member) => member.user_id === user?.id) ?? null;
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "admin";
   const isOwner = currentMember?.role === "owner";
@@ -136,7 +148,6 @@ export default function SettingsPage() {
   const handleSave = async () => {
     if (!workspace) return;
     setSaving(true);
-    setWorkspaceError("");
     try {
       const updated = await api.updateWorkspace(workspace.id, {
         name,
@@ -144,10 +155,9 @@ export default function SettingsPage() {
         context,
       });
       updateWorkspace(updated);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      toast.success("Workspace settings saved");
     } catch (e) {
-      setWorkspaceError(e instanceof Error ? e.message : "Failed to update workspace");
+      toast.error(e instanceof Error ? e.message : "Failed to save workspace settings");
     } finally {
       setSaving(false);
     }
@@ -155,17 +165,15 @@ export default function SettingsPage() {
 
   const handleProfileSave = async () => {
     setProfileSaving(true);
-    setProfileError("");
     try {
       const updated = await api.updateMe({
         name: profileName,
         avatar_url: avatarUrl || undefined,
       });
       setUser(updated);
-      setProfileSaved(true);
-      setTimeout(() => setProfileSaved(false), 2000);
+      toast.success("Profile updated");
     } catch (e) {
-      setProfileError(e instanceof Error ? e.message : "Failed to update profile");
+      toast.error(e instanceof Error ? e.message : "Failed to update profile");
     } finally {
       setProfileSaving(false);
     }
@@ -174,7 +182,6 @@ export default function SettingsPage() {
   const handleAddMember = async () => {
     if (!workspace) return;
     setInviteLoading(true);
-    setMemberError("");
     try {
       await api.createMember(workspace.id, {
         email: inviteEmail,
@@ -183,8 +190,9 @@ export default function SettingsPage() {
       setInviteEmail("");
       setInviteRole("member");
       await refreshMembers();
+      toast.success("Member added");
     } catch (e) {
-      setMemberError(e instanceof Error ? e.message : "Failed to add member");
+      toast.error(e instanceof Error ? e.message : "Failed to add member");
     } finally {
       setInviteLoading(false);
     }
@@ -193,61 +201,74 @@ export default function SettingsPage() {
   const handleRoleChange = async (memberId: string, role: MemberRole) => {
     if (!workspace) return;
     setMemberActionId(memberId);
-    setMemberError("");
     try {
       await api.updateMember(workspace.id, memberId, { role });
       await refreshMembers();
+      toast.success("Role updated");
     } catch (e) {
-      setMemberError(e instanceof Error ? e.message : "Failed to update member");
+      toast.error(e instanceof Error ? e.message : "Failed to update member");
     } finally {
       setMemberActionId(null);
     }
   };
 
-  const handleRemoveMember = async (member: MemberWithUser) => {
+  const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
-    if (!window.confirm(`Remove ${member.name} from ${workspace.name}?`)) return;
-
-    setMemberActionId(member.id);
-    setMemberError("");
-    try {
-      await api.deleteMember(workspace.id, member.id);
-      await refreshMembers();
-    } catch (e) {
-      setMemberError(e instanceof Error ? e.message : "Failed to remove member");
-    } finally {
-      setMemberActionId(null);
-    }
+    setConfirmAction({
+      title: `Remove ${member.name}`,
+      description: `Remove ${member.name} from ${workspace.name}? They will lose access to this workspace.`,
+      variant: "destructive",
+      onConfirm: async () => {
+        setMemberActionId(member.id);
+        try {
+          await api.deleteMember(workspace.id, member.id);
+          await refreshMembers();
+          toast.success("Member removed");
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to remove member");
+        } finally {
+          setMemberActionId(null);
+        }
+      },
+    });
   };
 
-  const handleLeaveWorkspace = async () => {
+  const handleLeaveWorkspace = () => {
     if (!workspace) return;
-    if (!window.confirm(`Leave ${workspace.name}?`)) return;
-
-    setMemberActionId("leave");
-    setMemberError("");
-    try {
-      await leaveWorkspace(workspace.id);
-    } catch (e) {
-      setMemberError(e instanceof Error ? e.message : "Failed to leave workspace");
-    } finally {
-      setMemberActionId(null);
-    }
+    setConfirmAction({
+      title: "Leave workspace",
+      description: `Leave ${workspace.name}? You will lose access until re-invited.`,
+      variant: "destructive",
+      onConfirm: async () => {
+        setMemberActionId("leave");
+        try {
+          await leaveWorkspace(workspace.id);
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to leave workspace");
+        } finally {
+          setMemberActionId(null);
+        }
+      },
+    });
   };
 
-  const handleDeleteWorkspace = async () => {
+  const handleDeleteWorkspace = () => {
     if (!workspace) return;
-    if (!window.confirm(`Delete ${workspace.name}? This cannot be undone.`)) return;
-
-    setMemberActionId("delete-workspace");
-    setMemberError("");
-    try {
-      await deleteWorkspace(workspace.id);
-    } catch (e) {
-      setMemberError(e instanceof Error ? e.message : "Failed to delete workspace");
-    } finally {
-      setMemberActionId(null);
-    }
+    setConfirmAction({
+      title: "Delete workspace",
+      description: `Delete ${workspace.name}? This cannot be undone. All issues, agents, and data will be permanently removed.`,
+      variant: "destructive",
+      onConfirm: async () => {
+        setMemberActionId("delete-workspace");
+        try {
+          await deleteWorkspace(workspace.id);
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to delete workspace");
+        } finally {
+          setMemberActionId(null);
+        }
+      },
+    });
   };
 
   if (!workspace) return null;
@@ -290,13 +311,7 @@ export default function SettingsPage() {
               className="mt-1"
             />
           </div>
-          {profileError && (
-            <p className="text-xs text-destructive">{profileError}</p>
-          )}
           <div className="flex items-center justify-end gap-2 pt-1">
-            {profileSaved && (
-              <span className="text-xs text-success">Saved!</span>
-            )}
             <Button
               size="sm"
               onClick={handleProfileSave}
@@ -346,12 +361,12 @@ export default function SettingsPage() {
             <Label className="text-xs text-muted-foreground">
               Context
             </Label>
-            <textarea
+            <Textarea
               value={context}
               onChange={(e) => setContext(e.target.value)}
               rows={4}
               disabled={!canManageWorkspace}
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              className="mt-1 resize-none"
               placeholder="Background information and context for AI agents working in this workspace"
             />
           </div>
@@ -364,12 +379,6 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="flex items-center justify-end gap-2 pt-1">
-            {workspaceError && (
-              <span className="text-xs text-destructive">{workspaceError}</span>
-            )}
-            {saved && (
-              <span className="text-xs text-success">Saved!</span>
-            )}
             <Button
               size="sm"
               onClick={handleSave}
@@ -397,10 +406,6 @@ export default function SettingsPage() {
             </h2>
           </div>
         </div>
-
-        {memberError && (
-          <p className="text-sm text-destructive">{memberError}</p>
-        )}
 
         {canManageWorkspace && (
           <div className="rounded-lg border p-4 space-y-3">
@@ -496,6 +501,27 @@ export default function SettingsPage() {
           )}
         </div>
       </section>
+
+      <AlertDialog open={!!confirmAction} onOpenChange={(v) => { if (!v) setConfirmAction(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={confirmAction?.variant === "destructive" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : ""}
+              onClick={async () => {
+                await confirmAction?.onConfirm();
+                setConfirmAction(null);
+              }}
+            >
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

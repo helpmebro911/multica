@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -36,19 +35,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
+import { useInboxStore } from "@/features/inbox";
+import { useModalStore } from "@/features/modals";
 
 const navItems = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -66,46 +56,15 @@ export function AppSidebar() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
-  const createWorkspace = useWorkspaceStore((s) => s.createWorkspace);
 
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newSlug, setNewSlug] = useState("");
-  const [creating, setCreating] = useState(false);
+  const unreadCount = useInboxStore((s) =>
+    s.items.filter((i) => !i.read && !i.archived).length
+  );
 
   const logout = () => {
     authLogout();
     useWorkspaceStore.getState().clearWorkspace();
     router.push("/login");
-  };
-
-  const handleNameChange = (value: string) => {
-    setNewName(value);
-    setNewSlug(
-      value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, ""),
-    );
-  };
-
-  const handleCreateWorkspace = async () => {
-    if (!newName.trim() || !newSlug.trim()) return;
-    setCreating(true);
-    try {
-      const ws = await createWorkspace({
-        name: newName.trim(),
-        slug: newSlug.trim(),
-      });
-      setShowCreateDialog(false);
-      setNewName("");
-      setNewSlug("");
-      await switchWorkspace(ws.id);
-    } catch (err) {
-      console.error("Failed to create workspace:", err);
-    } finally {
-      setCreating(false);
-    }
   };
 
   return (
@@ -146,7 +105,7 @@ export function AppSidebar() {
                     {workspaces.map((ws) => (
                       <DropdownMenuItem
                         key={ws.id}
-                        onSelect={() => {
+                        onClick={() => {
                           if (ws.id !== workspace?.id) {
                             switchWorkspace(ws.id);
                           }
@@ -161,7 +120,9 @@ export function AppSidebar() {
                         )}
                       </DropdownMenuItem>
                     ))}
-                    <DropdownMenuItem onSelect={() => setShowCreateDialog(true)}>
+                    <DropdownMenuItem
+                      onClick={() => useModalStore.getState().open("create-workspace")}
+                    >
                       <Plus className="h-3.5 w-3.5" />
                       Create workspace
                     </DropdownMenuItem>
@@ -174,7 +135,7 @@ export function AppSidebar() {
                       <Settings className="h-3.5 w-3.5" />
                       Settings
                     </DropdownMenuItem>
-                    <DropdownMenuItem variant="destructive" onSelect={logout}>
+                    <DropdownMenuItem variant="destructive" onClick={logout}>
                       <LogOut className="h-3.5 w-3.5" />
                       Sign out
                     </DropdownMenuItem>
@@ -202,6 +163,11 @@ export function AppSidebar() {
                       >
                         <item.icon />
                         <span>{item.label}</span>
+                        {item.label === "Inbox" && unreadCount > 0 && (
+                          <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
+                            {unreadCount > 99 ? "99+" : unreadCount}
+                          </span>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
@@ -232,55 +198,6 @@ export function AppSidebar() {
           )}
         </SidebarFooter>
       </Sidebar>
-
-      {/* Create Workspace Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create workspace</DialogTitle>
-            <DialogDescription>
-              Create a new workspace for your team.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Name</Label>
-              <Input
-                autoFocus
-                type="text"
-                value={newName}
-                onChange={(e) => handleNameChange(e.target.value)}
-                placeholder="My Workspace"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Slug</Label>
-              <Input
-                type="text"
-                value={newSlug}
-                onChange={(e) => setNewSlug(e.target.value)}
-                placeholder="my-workspace"
-                className="mt-1"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setShowCreateDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreateWorkspace}
-              disabled={creating || !newName.trim() || !newSlug.trim()}
-            >
-              {creating ? "Creating..." : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

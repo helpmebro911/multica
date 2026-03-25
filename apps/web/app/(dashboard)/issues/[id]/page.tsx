@@ -31,6 +31,13 @@ import {
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { Issue, Comment, UpdateIssueRequest } from "@multica/types";
 import { StatusPicker, PriorityPicker, AssigneePicker } from "@/features/issues/components";
@@ -38,6 +45,7 @@ import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useActorName } from "@/features/workspace";
 import { useWSEvent } from "@/features/realtime";
+import { useIssueStore } from "@/features/issues";
 import type { CommentCreatedPayload, CommentUpdatedPayload, CommentDeletedPayload } from "@multica/types";
 
 // ---------------------------------------------------------------------------
@@ -162,40 +170,53 @@ function AcceptanceCriteriaEditor({
     onUpdate({ acceptance_criteria: criteria.filter((_, i) => i !== index) });
   };
 
-  if (criteria.length === 0 && !newItem) {
-    return null;
-  }
+  const [adding, setAdding] = useState(false);
 
   return (
     <div className="space-y-2">
       <h3 className="text-xs font-medium text-muted-foreground">Acceptance Criteria</h3>
-      <div className="space-y-1">
-        {criteria.map((item, i) => (
-          <div key={i} className="group flex items-start gap-2 text-sm">
-            <span className="mt-0.5 text-muted-foreground">&bull;</span>
-            <span className="flex-1">{item}</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => removeItem(i)}
-              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        ))}
-      </div>
-      <form
-        onSubmit={(e) => { e.preventDefault(); addItem(); }}
-        className="flex items-center gap-2"
-      >
-        <input
-          value={newItem}
-          onChange={(e) => setNewItem(e.target.value)}
-          placeholder="Add criteria..."
-          className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
-        />
-      </form>
+      {criteria.length > 0 && (
+        <div className="space-y-1">
+          {criteria.map((item, i) => (
+            <div key={i} className="group flex items-start gap-2 text-sm">
+              <span className="mt-0.5 text-muted-foreground">&bull;</span>
+              <span className="flex-1">{item}</span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => removeItem(i)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {(criteria.length > 0 || adding) ? (
+        <form
+          onSubmit={(e) => { e.preventDefault(); addItem(); }}
+          className="flex items-center gap-2"
+        >
+          <input
+            autoFocus={adding}
+            value={newItem}
+            onChange={(e) => setNewItem(e.target.value)}
+            onBlur={() => { if (!newItem.trim()) setAdding(false); }}
+            placeholder="Add criteria..."
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+        </form>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground h-7 px-2 text-xs"
+          onClick={() => setAdding(true)}
+        >
+          + Add acceptance criteria
+        </Button>
+      )}
     </div>
   );
 }
@@ -223,48 +244,61 @@ function ContextRefsEditor({
     onUpdate({ context_refs: refs.filter((_, i) => i !== index) });
   };
 
-  if (refs.length === 0 && !newRef) {
-    return null;
-  }
+  const [adding, setAdding] = useState(false);
 
   const isUrl = (s: string) => s.startsWith("http://") || s.startsWith("https://");
 
   return (
     <div className="space-y-2">
       <h3 className="text-xs font-medium text-muted-foreground">Context References</h3>
-      <div className="space-y-1">
-        {refs.map((ref, i) => (
-          <div key={i} className="group flex items-center gap-2 text-sm">
-            <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            {isUrl(ref) ? (
-              <a href={ref} target="_blank" rel="noopener noreferrer" className="flex-1 text-info hover:underline truncate">
-                {ref}
-              </a>
-            ) : (
-              <span className="flex-1 truncate">{ref}</span>
-            )}
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => removeRef(i)}
-              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        ))}
-      </div>
-      <form
-        onSubmit={(e) => { e.preventDefault(); addRef(); }}
-        className="flex items-center gap-2"
-      >
-        <input
-          value={newRef}
-          onChange={(e) => setNewRef(e.target.value)}
-          placeholder="Add reference URL..."
-          className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
-        />
-      </form>
+      {refs.length > 0 && (
+        <div className="space-y-1">
+          {refs.map((ref, i) => (
+            <div key={i} className="group flex items-center gap-2 text-sm">
+              <Link2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              {isUrl(ref) ? (
+                <a href={ref} target="_blank" rel="noopener noreferrer" className="flex-1 text-info hover:underline truncate">
+                  {ref}
+                </a>
+              ) : (
+                <span className="flex-1 truncate">{ref}</span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => removeRef(i)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {(refs.length > 0 || adding) ? (
+        <form
+          onSubmit={(e) => { e.preventDefault(); addRef(); }}
+          className="flex items-center gap-2"
+        >
+          <input
+            autoFocus={adding}
+            value={newRef}
+            onChange={(e) => setNewRef(e.target.value)}
+            onBlur={() => { if (!newRef.trim()) setAdding(false); }}
+            placeholder="Add reference URL..."
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+        </form>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground h-7 px-2 text-xs"
+          onClick={() => setAdding(true)}
+        >
+          + Add context reference
+        </Button>
+      )}
     </div>
   );
 }
@@ -290,6 +324,19 @@ export default function IssueDetailPage({
   const [deleting, setDeleting] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+
+  // Watch the global issue store for real-time updates from other users/agents
+  const storeIssue = useIssueStore((s) => s.issues.find((i) => i.id === id));
+
+  useEffect(() => {
+    if (storeIssue) {
+      setIssue(storeIssue);
+    }
+  }, [storeIssue]);
 
   useEffect(() => {
     setIssue(null);
@@ -306,14 +353,28 @@ export default function IssueDetailPage({
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim() || submitting) return;
+    if (!commentText.trim() || submitting || !user) return;
+    const content = commentText.trim();
+    const tempId = "temp-" + Date.now();
+    const tempComment: Comment = {
+      id: tempId,
+      issue_id: id,
+      author_type: "member",
+      author_id: user.id,
+      content,
+      type: "comment",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setComments((prev) => [...prev, tempComment]);
+    setCommentText("");
     setSubmitting(true);
     try {
-      const comment = await api.createComment(id, commentText.trim());
-      setComments((prev) => [...prev, comment]);
-      setCommentText("");
-    } catch (err) {
-      console.error("Failed to create comment:", err);
+      const comment = await api.createComment(id, content);
+      setComments((prev) => prev.map((c) => (c.id === tempId ? comment : c)));
+    } catch {
+      setComments((prev) => prev.filter((c) => c.id !== tempId));
+      toast.error("Failed to send comment");
     } finally {
       setSubmitting(false);
     }
@@ -467,28 +528,72 @@ export default function IssueDetailPage({
         <div className="mx-auto w-full max-w-3xl px-8 py-8">
           <div className="mb-1 text-[13px] text-muted-foreground">{issue.id.slice(0, 8)}</div>
 
-          <h1 className="text-xl font-semibold leading-snug tracking-tight">
-            {issue.title}
-          </h1>
+          {editingTitle ? (
+            <Input
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                if (titleDraft.trim()) handleUpdateField({ title: titleDraft.trim() });
+                setEditingTitle(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (titleDraft.trim()) handleUpdateField({ title: titleDraft.trim() });
+                  setEditingTitle(false);
+                } else if (e.key === "Escape") {
+                  setEditingTitle(false);
+                }
+              }}
+              className="text-xl font-semibold leading-snug tracking-tight"
+            />
+          ) : (
+            <h1
+              className="text-xl font-semibold leading-snug tracking-tight cursor-pointer hover:bg-accent/50 rounded px-1 -mx-1"
+              onClick={() => { setTitleDraft(issue.title); setEditingTitle(true); }}
+            >
+              {issue.title}
+            </h1>
+          )}
 
-          {issue.description && (
-            <div className="mt-5 text-[14px] leading-[1.7] text-foreground/85 whitespace-pre-wrap">
-              {issue.description}
+          {editingDesc ? (
+            <Textarea
+              autoFocus
+              value={descDraft}
+              onChange={(e) => setDescDraft(e.target.value)}
+              onBlur={() => {
+                handleUpdateField({ description: descDraft.trim() || undefined });
+                setEditingDesc(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setEditingDesc(false);
+              }}
+              rows={4}
+              className="mt-5 text-[14px] leading-[1.7] resize-none"
+            />
+          ) : (
+            <div
+              className="mt-5 text-[14px] leading-[1.7] whitespace-pre-wrap cursor-pointer hover:bg-accent/50 rounded px-1 -mx-1"
+              onClick={() => { setDescDraft(issue.description || ""); setEditingDesc(true); }}
+            >
+              {issue.description ? (
+                <span className="text-foreground/85">{issue.description}</span>
+              ) : (
+                <span className="text-muted-foreground">Add description...</span>
+              )}
             </div>
           )}
 
-          {(issue.acceptance_criteria.length > 0 || issue.context_refs.length > 0) && (
-            <div className="space-y-4 mt-4">
-              <AcceptanceCriteriaEditor
-                criteria={issue.acceptance_criteria}
-                onUpdate={handleUpdateField}
-              />
-              <ContextRefsEditor
-                refs={issue.context_refs}
-                onUpdate={handleUpdateField}
-              />
-            </div>
-          )}
+          <div className="space-y-4 mt-4">
+            <AcceptanceCriteriaEditor
+              criteria={issue.acceptance_criteria}
+              onUpdate={handleUpdateField}
+            />
+            <ContextRefsEditor
+              refs={issue.context_refs}
+              onUpdate={handleUpdateField}
+            />
+          </div>
 
           <div className="my-8 border-t" />
 
@@ -500,7 +605,7 @@ export default function IssueDetailPage({
               {comments.map((comment) => {
                 const isOwn = comment.author_type === "member" && comment.author_id === user?.id;
                 return (
-                  <div key={comment.id} className="group relative py-3">
+                  <div key={comment.id} className={`group relative py-3${comment.id.startsWith("temp-") ? " opacity-60" : ""}`}>
                     <div className="flex items-center gap-2.5">
                       <ActorAvatar
                         actorType={comment.author_type}
@@ -512,9 +617,20 @@ export default function IssueDetailPage({
                       <span className="text-[13px] font-medium">
                         {getActorName(comment.author_type, comment.author_id)}
                       </span>
-                      <span className="text-[12px] text-muted-foreground">
-                        {timeAgo(comment.created_at)}
-                      </span>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <span className="text-[12px] text-muted-foreground cursor-default">
+                                {timeAgo(comment.created_at)}
+                              </span>
+                            }
+                          />
+                          <TooltipContent side="top">
+                            {new Date(comment.created_at).toLocaleString()}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                       {isOwn && (
                         <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Button

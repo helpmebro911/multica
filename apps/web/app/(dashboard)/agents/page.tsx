@@ -132,7 +132,7 @@ function CreateAgentDialog({
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Create Agent</DialogTitle>
           <DialogDescription>
@@ -191,7 +191,7 @@ function CreateAgentDialog({
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="truncate text-xs text-muted-foreground">
                     {selectedRuntime?.device_info ?? "Register a runtime before creating an agent"}
                   </div>
                 </div>
@@ -227,7 +227,7 @@ function CreateAgentDialog({
                               </span>
                             )}
                           </div>
-                          <div className="text-xs text-muted-foreground">{device.device_info}</div>
+                          <div className="truncate text-xs text-muted-foreground">{device.device_info}</div>
                         </div>
                         <span
                           className={`h-2 w-2 shrink-0 rounded-full ${

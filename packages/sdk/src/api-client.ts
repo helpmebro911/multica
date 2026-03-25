@@ -224,12 +224,16 @@ export class ApiClient {
     return this.fetch("/api/inbox");
   }
 
-  async markInboxRead(id: string): Promise<void> {
-    await this.fetch(`/api/inbox/${id}/read`, { method: "POST" });
+  async markInboxRead(id: string): Promise<InboxItem> {
+    return this.fetch(`/api/inbox/${id}/read`, { method: "POST" });
   }
 
-  async archiveInbox(id: string): Promise<void> {
-    await this.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
+  async archiveInbox(id: string): Promise<InboxItem> {
+    return this.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
+  }
+
+  async getUnreadInboxCount(): Promise<{ count: number }> {
+    return this.fetch("/api/inbox/unread-count");
   }
 
   // Workspaces

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		resp = append(resp, runtimeToResponse(registered))
 	}
+
+	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
+		"runtimes": resp,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"runtimes": resp})
 }
@@ -195,7 +200,16 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.TaskService.ReportProgress(taskID, req.Summary, req.Step, req.Total)
+	// Look up task to get workspace ID via the associated issue.
+	workspaceID := ""
+	task, err := h.Queries.GetAgentTask(r.Context(), parseUUID(taskID))
+	if err == nil {
+		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
+			workspaceID = uuidToString(issue.WorkspaceID)
+		}
+	}
+
+	h.TaskService.ReportProgress(r.Context(), taskID, workspaceID, req.Summary, req.Step, req.Total)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

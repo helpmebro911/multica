@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useState,
   useRef,
   useCallback,
   type ReactNode,
@@ -11,6 +12,8 @@ import {
 import { WSClient } from "@multica/sdk";
 import type { WSEventType } from "@multica/types";
 import { useAuthStore } from "@/features/auth";
+import { useWorkspaceStore } from "@/features/workspace";
+import { useRealtimeSync } from "./use-realtime-sync";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/ws";
 
@@ -24,20 +27,31 @@ const WSContext = createContext<WSContextValue | null>(null);
 
 export function WSProvider({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const [wsClient, setWsClient] = useState<WSClient | null>(null);
   const wsRef = useRef<WSClient | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !workspace) return;
+
+    const token = localStorage.getItem("multica_token");
+    if (!token) return;
 
     const ws = new WSClient(WS_URL);
+    ws.setAuth(token, workspace.id);
     wsRef.current = ws;
+    setWsClient(ws);
     ws.connect();
 
     return () => {
       ws.disconnect();
       wsRef.current = null;
+      setWsClient(null);
     };
-  }, [user]);
+  }, [user, workspace]);
+
+  // Centralized WS → store sync (uses state so it re-subscribes when WS changes)
+  useRealtimeSync(wsClient);
 
   const subscribe = useCallback(
     (event: WSEventType, handler: EventHandler) => {

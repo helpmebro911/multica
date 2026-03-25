@@ -261,7 +261,7 @@ func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 		SkillResponse: skillToResponse(skill),
 		Files:         fileResps,
 	}
-	h.broadcast("skill:created", map[string]any{"skill": resp})
+	h.publish("skill:created", workspaceID, "member", creatorID, map[string]any{"skill": resp})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -361,7 +361,7 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		SkillResponse: skillToResponse(skill),
 		Files:         fileResps,
 	}
-	h.broadcast("skill:updated", map[string]any{"skill": resp})
+	h.publish("skill:updated", resolveWorkspaceID(r), "member", requestUserID(r), map[string]any{"skill": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -379,7 +379,7 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete skill")
 		return
 	}
-	h.broadcast("skill:deleted", map[string]any{"skill_id": id})
+	h.publish("skill:deleted", uuidToString(skill.WorkspaceID), "member", requestUserID(r), map[string]any{"skill_id": id})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -535,6 +535,6 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 	for i, s := range skills {
 		resp[i] = skillToResponse(s)
 	}
-	h.broadcast("agent:status", map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
+	h.publish("agent:status", uuidToString(agent.WorkspaceID), "member", requestUserID(r), map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
 	writeJSON(w, http.StatusOK, resp)
 }

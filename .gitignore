@@ -40,3 +40,4 @@ apps/web/test-results/
 # platform specific
 *.dmg
 *.app
+server/server

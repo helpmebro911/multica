@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
 )
 
@@ -60,7 +61,9 @@ func TestMain(m *testing.M) {
 	hub := realtime.NewHub()
 	go hub.Run()
 
-	router := NewRouter(pool, hub)
+	bus := events.New()
+	registerListeners(bus, hub)
+	router := NewRouter(pool, hub, bus)
 	testServer = httptest.NewServer(router)
 
 	// Login to get a real JWT token
@@ -708,12 +711,15 @@ func TestInvalidRequestBodies(t *testing.T) {
 
 func TestWebSocketIntegration(t *testing.T) {
 	// Connect WebSocket client
-	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/ws"
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http") + "/ws?token=" + testToken + "&workspace_id=" + testWorkspaceID
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("WebSocket connection failed: %v", err)
 	}
 	defer conn.Close()
+
+	// Allow Hub goroutine to process the register and add client to room
+	time.Sleep(100 * time.Millisecond)
 
 	// Create an issue — this should trigger a WebSocket broadcast
 	resp := authRequest(t, "POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{

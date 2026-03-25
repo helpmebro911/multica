@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useIssueStore } from "@/features/issues";
+import { useModalStore } from "@/features/modals";
+import { toast } from "sonner";
 import Link from "next/link";
 import {
   Columns3,
   List,
   Plus,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DndContext,
   DragOverlay,
@@ -21,18 +25,8 @@ import {
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { Issue, IssueStatus, IssuePriority } from "@multica/types";
-import { STATUS_CONFIG, PRIORITY_CONFIG, ALL_STATUSES, PRIORITY_ORDER } from "@/features/issues/config";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { STATUS_CONFIG, PRIORITY_CONFIG, ALL_STATUSES, PRIORITY_ORDER, STATUS_ORDER } from "@/features/issues/config";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectTrigger,
@@ -45,8 +39,6 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { StatusIcon, PriorityIcon } from "@/features/issues/components";
 import { api } from "@/shared/api";
 import { useActorName } from "@/features/workspace";
-import { useWSEvent } from "@/features/realtime";
-import type { IssueCreatedPayload, IssueUpdatedPayload, IssueDeletedPayload } from "@multica/types";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -54,6 +46,15 @@ function formatDate(date: string): string {
     day: "numeric",
   });
 }
+
+const BOARD_STATUSES: IssueStatus[] = [
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "blocked",
+];
 
 // ---------------------------------------------------------------------------
 // Board View — Card
@@ -119,13 +120,10 @@ function DraggableBoardCard({ issue }: { issue: Issue }) {
       {...attributes}
       {...listeners}
       className={isDragging ? "opacity-30" : ""}
-      onClickCapture={(e) => {
-        if (isDragging) e.stopPropagation();
-      }}
     >
       <Link
         href={`/issues/${issue.id}`}
-        className="block transition-colors hover:opacity-80"
+        className={`block transition-colors hover:opacity-80 ${isDragging ? "pointer-events-none" : ""}`}
       >
         <BoardCardContent issue={issue} />
       </Link>
@@ -156,13 +154,16 @@ function DroppableColumn({
       </div>
       <div
         ref={setNodeRef}
-        className={`flex-1 space-y-1.5 overflow-y-auto rounded-lg p-1 transition-colors ${
+        className={`min-h-[200px] flex-1 space-y-1.5 overflow-y-auto rounded-lg p-1 transition-colors ${
           isOver ? "bg-accent/40" : ""
         }`}
       >
         {issues.map((issue) => (
           <DraggableBoardCard key={issue.id} issue={issue} />
         ))}
+        {issues.length === 0 && (
+          <p className="py-8 text-center text-xs text-muted-foreground">No issues</p>
+        )}
       </div>
     </div>
   );
@@ -187,13 +188,7 @@ function BoardView({
     })
   );
 
-  const visibleStatuses: IssueStatus[] = [
-    "backlog",
-    "todo",
-    "in_progress",
-    "in_review",
-    "done",
-  ];
+  const visibleStatuses = BOARD_STATUSES;
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -293,13 +288,7 @@ function ListRow({ issue }: { issue: Issue }) {
 }
 
 function ListView({ issues }: { issues: Issue[] }) {
-  const groupOrder: IssueStatus[] = [
-    "in_review",
-    "in_progress",
-    "todo",
-    "backlog",
-    "done",
-  ];
+  const groupOrder = STATUS_ORDER.filter((s) => s !== "cancelled");
 
   return (
     <div className="overflow-y-auto">
@@ -328,116 +317,6 @@ function ListView({ issues }: { issues: Issue[] }) {
 // Create Issue Dialog
 // ---------------------------------------------------------------------------
 
-function CreateIssueDialog({ onCreated }: { onCreated: (issue: Issue) => void }) {
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<IssueStatus>("todo");
-  const [priority, setPriority] = useState<IssuePriority>("none");
-  const [submitting, setSubmitting] = useState(false);
-
-  const reset = () => {
-    setTitle("");
-    setDescription("");
-    setStatus("todo");
-    setPriority("none");
-  };
-
-  const handleSubmit = async () => {
-    if (!title.trim()) return;
-    setSubmitting(true);
-    try {
-      const issue = await api.createIssue({
-        title: title.trim(),
-        description: description.trim() || undefined,
-        status,
-        priority,
-      });
-      onCreated(issue);
-      reset();
-      setOpen(false);
-    } catch (err) {
-      console.error("Failed to create issue:", err);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
-      <DialogTrigger
-        render={
-          <Button size="sm">
-            <Plus className="h-3.5 w-3.5" />
-            New Issue
-          </Button>
-        }
-      />
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New Issue</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <Input
-            autoFocus
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit();
-              }
-            }}
-            placeholder="Issue title"
-          />
-          <Textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Add description..."
-            rows={3}
-            className="resize-none"
-          />
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Status selector */}
-            <Select value={status} onValueChange={(v) => setStatus(v as IssueStatus)}>
-              <SelectTrigger size="sm" className="text-xs">
-                <StatusIcon status={status} className="h-3.5 w-3.5" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ALL_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>{STATUS_CONFIG[s].label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* Priority selector */}
-            <Select value={priority} onValueChange={(v) => setPriority(v as IssuePriority)}>
-              <SelectTrigger size="sm" className="text-xs">
-                <PriorityIcon priority={priority} />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PRIORITY_ORDER.map((p) => (
-                  <SelectItem key={p} value={p}>{PRIORITY_CONFIG[p].label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button
-            onClick={handleSubmit}
-            disabled={!title.trim() || submitting}
-          >
-            {submitting ? "Creating..." : "Create Issue"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -446,84 +325,55 @@ type ViewMode = "board" | "list";
 
 export default function IssuesPage() {
   const [view, setView] = useState<ViewMode>("board");
-  const [issues, setIssues] = useState<Issue[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<IssueStatus | "">("");
   const [filterPriority, setFilterPriority] = useState<IssuePriority | "">("");
 
-  useEffect(() => {
-    setLoading(true);
-    api
-      .listIssues({
-        limit: 200,
-        ...(filterStatus ? { status: filterStatus } : {}),
-        ...(filterPriority ? { priority: filterPriority } : {}),
-      })
-      .then((res) => {
-        setIssues(res.issues);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [filterStatus, filterPriority]);
+  // Read from global store (populated by workspace hydrate + useRealtimeSync)
+  const allIssues = useIssueStore((s) => s.issues);
+  const loading = useIssueStore((s) => s.loading);
 
-  // Real-time updates
-  useWSEvent(
-    "issue:created",
-    useCallback((payload: unknown) => {
-      const { issue } = payload as IssueCreatedPayload;
-      setIssues((prev) => {
-        if (prev.some((i) => i.id === issue.id)) return prev;
-        return [...prev, issue];
-      });
-    }, []),
-  );
-
-  useWSEvent(
-    "issue:updated",
-    useCallback((payload: unknown) => {
-      const { issue } = payload as IssueUpdatedPayload;
-      setIssues((prev) => prev.map((i) => (i.id === issue.id ? issue : i)));
-    }, []),
-  );
-
-  useWSEvent(
-    "issue:deleted",
-    useCallback((payload: unknown) => {
-      const { issue_id } = payload as IssueDeletedPayload;
-      setIssues((prev) => prev.filter((i) => i.id !== issue_id));
-    }, []),
-  );
+  // Apply local filters
+  const issues = useMemo(() => {
+    return allIssues.filter((issue) => {
+      if (filterStatus && issue.status !== filterStatus) return false;
+      if (filterPriority && issue.priority !== filterPriority) return false;
+      return true;
+    });
+  }, [allIssues, filterStatus, filterPriority]);
 
   const handleMoveIssue = useCallback(
     (issueId: string, newStatus: IssueStatus) => {
-      // Optimistic update
-      setIssues((prev) =>
-        prev.map((issue) =>
-          issue.id === issueId ? { ...issue, status: newStatus } : issue
-        )
-      );
+      // Optimistic update in store
+      useIssueStore.getState().updateIssue(issueId, { status: newStatus });
 
       // Persist to API
       api.updateIssue(issueId, { status: newStatus }).catch((err) => {
-        console.error("Failed to update issue:", err);
-        // Revert on error
-        api.listIssues({ limit: 200 }).then((res) => setIssues(res.issues));
+        toast.error("Failed to move issue");
+        // Revert on error by refetching
+        api.listIssues({ limit: 200 }).then((res) => {
+          useIssueStore.getState().setIssues(res.issues);
+        });
       });
     },
     []
   );
 
-  const handleIssueCreated = useCallback((issue: Issue) => {
-    setIssues((prev) => {
-      if (prev.some((i) => i.id === issue.id)) return prev;
-      return [...prev, issue];
-    });
-  }, []);
-
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading...
+      <div className="flex h-full flex-col">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-8 w-24" />
+        </div>
+        <div className="flex flex-1 gap-3 overflow-x-auto p-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex min-w-52 flex-1 flex-col gap-2">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-24 w-full rounded-lg" />
+              <Skeleton className="h-24 w-full rounded-lg" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -591,11 +441,26 @@ export default function IssuesPage() {
             </Select>
           </div>
         </div>
-        <CreateIssueDialog onCreated={handleIssueCreated} />
+        <Button size="sm" onClick={() => useModalStore.getState().open("create-issue")}>
+          <Plus className="h-3.5 w-3.5" />
+          New Issue
+        </Button>
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {view === "board" ? (
+        {issues.length === 0 && !loading ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <p>No matching issues</p>
+            {(filterStatus || filterPriority) && (
+              <button
+                className="text-xs text-primary hover:underline"
+                onClick={() => { setFilterStatus(""); setFilterPriority(""); }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        ) : view === "board" ? (
           <BoardView issues={issues} onMoveIssue={handleMoveIssue} />
         ) : (
           <ListView issues={issues} />

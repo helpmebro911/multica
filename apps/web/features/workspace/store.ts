@@ -2,6 +2,8 @@
 
 import { create } from "zustand";
 import type { Workspace, MemberWithUser, Agent, Skill } from "@multica/types";
+import { useIssueStore } from "@/features/issues";
+import { useInboxStore } from "@/features/inbox";
 import { api } from "@/shared/api";
 
 interface WorkspaceState {
@@ -20,6 +22,7 @@ interface WorkspaceActions {
   switchWorkspace: (workspaceId: string) => Promise<void>;
   refreshWorkspaces: () => Promise<Workspace[]>;
   refreshMembers: () => Promise<void>;
+  updateAgent: (id: string, updates: Partial<Agent>) => void;
   refreshAgents: () => Promise<void>;
   refreshSkills: () => Promise<void>;
   upsertSkill: (skill: Skill) => void;
@@ -67,20 +70,30 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     localStorage.setItem("multica_workspace_id", nextWorkspace.id);
     set({ workspace: nextWorkspace });
 
+    console.log("[workspace-store] hydrate workspace:", nextWorkspace.name, nextWorkspace.id);
     const [nextMembers, nextAgents, nextSkills] = await Promise.all([
       api.listMembers(nextWorkspace.id),
       api.listAgents({ workspace_id: nextWorkspace.id }),
       api.listSkills().catch(() => [] as Skill[]),
+      useIssueStore.getState().fetch(),
+      useInboxStore.getState().fetch(),
     ]);
+    console.log("[workspace-store] hydrate complete, members:", nextMembers.length, "agents:", nextAgents.length);
     set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
 
     return nextWorkspace;
   },
 
   switchWorkspace: async (workspaceId) => {
+    console.log("[workspace-store] switching to", workspaceId);
     const { workspaces, hydrateWorkspace } = get();
     const ws = workspaces.find((item) => item.id === workspaceId);
     if (!ws) return;
+
+    // Clear stale data from other stores before switching
+    useIssueStore.getState().setIssues([]);
+    useInboxStore.getState().setItems([]);
+    set({ agents: [], skills: [] });
 
     await hydrateWorkspace(workspaces, ws.id);
   },
@@ -99,6 +112,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const members = await api.listMembers(workspace.id);
     set({ members });
   },
+
+  updateAgent: (id, updates) =>
+    set((s) => ({
+      agents: s.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)),
+    })),
 
   refreshAgents: async () => {
     const { workspace } = get();

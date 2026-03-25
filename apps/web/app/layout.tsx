@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { AuthInitializer } from "@/features/auth";
 import { WSProvider } from "@/features/realtime";
+import { ModalRegistry } from "@/features/modals";
 import "./globals.css";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
@@ -35,6 +36,7 @@ export default function RootLayout({
           <AuthInitializer>
             <WSProvider>{children}</WSProvider>
           </AuthInitializer>
+          <ModalRegistry />
           <Toaster />
         </ThemeProvider>
       </body>

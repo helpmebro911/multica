@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -31,10 +31,11 @@ type Handler struct {
 	DB          dbExecutor
 	TxStarter   txStarter
 	Hub         *realtime.Hub
+	Bus         *events.Bus
 	TaskService *service.TaskService
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub) *Handler {
+func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -45,7 +46,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub) *Handler {
 		DB:          executor,
 		TxStarter:   txStarter,
 		Hub:         hub,
-		TaskService: service.NewTaskService(queries, hub),
+		Bus:         bus,
+		TaskService: service.NewTaskService(queries, hub, bus),
 	}
 }
 
@@ -69,18 +71,15 @@ func timestampToString(t pgtype.Timestamptz) string { return util.TimestampToStr
 func timestampToPtr(t pgtype.Timestamptz) *string   { return util.TimestampToPtr(t) }
 func uuidToPtr(u pgtype.UUID) *string      { return util.UUIDToPtr(u) }
 
-// broadcast sends a WebSocket event to all connected clients.
-func (h *Handler) broadcast(eventType string, payload any) {
-	msg := map[string]any{
-		"type":    eventType,
-		"payload": payload,
-	}
-	data, err := json.Marshal(msg)
-	if err != nil {
-		fmt.Printf("broadcast marshal error: %v\n", err)
-		return
-	}
-	h.Hub.Broadcast(data)
+// publish sends a domain event through the event bus.
+func (h *Handler) publish(eventType, workspaceID, actorType, actorID string, payload any) {
+	h.Bus.Publish(events.Event{
+		Type:        eventType,
+		WorkspaceID: workspaceID,
+		ActorType:   actorType,
+		ActorID:     actorID,
+		Payload:     payload,
+	})
 }
 
 func isNotFound(err error) bool {

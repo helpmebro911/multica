@@ -6,6 +6,7 @@ export const STATUS_ORDER: IssueStatus[] = [
   "in_progress",
   "in_review",
   "done",
+  "blocked",
   "cancelled",
 ];
 
@@ -15,6 +16,7 @@ export const ALL_STATUSES: IssueStatus[] = [
   "in_progress",
   "in_review",
   "done",
+  "blocked",
   "cancelled",
 ];
 

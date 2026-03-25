@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strings"
@@ -8,8 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -40,9 +43,9 @@ func allowedOrigins() []string {
 }
 
 // NewRouter creates the fully-configured Chi router with all middleware and routes.
-func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub) chi.Router {
+func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Router {
 	queries := db.New(pool)
-	h := handler.New(queries, pool, hub)
+	h := handler.New(queries, pool, hub, bus)
 
 	r := chi.NewRouter()
 
@@ -65,8 +68,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub) chi.Router {
 	})
 
 	// WebSocket
+	mc := &membershipChecker{queries: queries}
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
-		realtime.HandleWebSocket(hub, w, r)
+		realtime.HandleWebSocket(hub, mc, w, r)
 	})
 
 	// Auth (public)
@@ -154,6 +158,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub) chi.Router {
 		// Inbox
 		r.Route("/api/inbox", func(r chi.Router) {
 			r.Get("/", h.ListInbox)
+			r.Get("/unread-count", h.CountUnreadInbox)
 			r.Post("/{id}/read", h.MarkInboxRead)
 			r.Post("/{id}/archive", h.ArchiveInboxItem)
 		})
@@ -179,4 +184,25 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub) chi.Router {
 	})
 
 	return r
+}
+
+// membershipChecker implements realtime.MembershipChecker using database queries.
+type membershipChecker struct {
+	queries *db.Queries
+}
+
+func (mc *membershipChecker) IsMember(ctx context.Context, userID, workspaceID string) bool {
+	_, err := mc.queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+		UserID:      parseUUID(userID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	return err == nil
+}
+
+func parseUUID(s string) pgtype.UUID {
+	var u pgtype.UUID
+	if err := u.Scan(s); err != nil {
+		return pgtype.UUID{}
+	}
+	return u
 }

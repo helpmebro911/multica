@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useInboxStore } from "@/features/inbox";
+import { toast } from "sonner";
 import {
   AlertCircle,
   Bot,
@@ -10,10 +12,11 @@ import {
   MessageSquare,
   ArrowRightLeft,
 } from "lucide-react";
-import type { InboxItem, InboxItemType, InboxSeverity, InboxNewPayload } from "@multica/types";
+import type { InboxItem, InboxItemType, InboxSeverity } from "@multica/types";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/shared/api";
-import { useWSEvent } from "@/features/realtime";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -98,9 +101,11 @@ function InboxListItem({
 function InboxDetail({
   item,
   onMarkRead,
+  onArchive,
 }: {
   item: InboxItem;
   onMarkRead: (id: string) => void;
+  onArchive: (id: string) => void;
 }) {
   const Icon = typeIcons[item.type] ?? CircleDot;
   const colorClass = severityColors[item.severity];
@@ -134,6 +139,22 @@ function InboxDetail({
             Mark read
           </Button>
         )}
+        {item.issue_id && (
+          <Link
+            href={`/issues/${item.issue_id}`}
+            className="inline-flex h-7 shrink-0 items-center rounded-md border px-2.5 text-xs font-medium transition-colors hover:bg-accent"
+          >
+            View Issue
+          </Link>
+        )}
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => onArchive(item.id)}
+          className="shrink-0"
+        >
+          Archive
+        </Button>
       </div>
 
       {/* Body */}
@@ -151,45 +172,49 @@ function InboxDetail({
 // ---------------------------------------------------------------------------
 
 export default function InboxPage() {
-  const [items, setItems] = useState<InboxItem[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [loading, setLoading] = useState(true);
 
+  // Read from global store (populated by workspace hydrate + useRealtimeSync)
+  const storeItems = useInboxStore((s) => s.items);
+  const loading = useInboxStore((s) => s.loading);
+
+  // Sort: severity first, then newest first
+  const items = useMemo(() => {
+    return [...storeItems]
+      .filter((i) => !i.archived)
+      .sort(
+        (a, b) =>
+          severityOrder[a.severity] - severityOrder[b.severity] ||
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+  }, [storeItems]);
+
+  // Auto-select first item when items change
   useEffect(() => {
-    api
-      .listInbox()
-      .then((data) => {
-        const sorted = [...data].sort(
-          (a, b) =>
-            severityOrder[a.severity] - severityOrder[b.severity] ||
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-        setItems(sorted);
-        if (sorted.length > 0) setSelectedId(sorted[0]!.id);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
-
-  useWSEvent(
-    "inbox:new",
-    useCallback((payload: unknown) => {
-      const { item } = payload as InboxNewPayload;
-      setItems((prev) => {
-        if (prev.some((i) => i.id === item.id)) return prev;
-        return [item, ...prev];
-      });
-    }, []),
-  );
+    if (items.length > 0 && !selectedId) {
+      setSelectedId(items[0]!.id);
+    }
+  }, [items, selectedId]);
 
   const handleMarkRead = async (id: string) => {
     try {
       await api.markInboxRead(id);
-      setItems((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, read: true } : i))
-      );
+      useInboxStore.getState().markRead(id);
     } catch (err) {
-      console.error("Failed to mark read:", err);
+      toast.error("Failed to mark as read");
+    }
+  };
+
+  const handleArchive = async (id: string) => {
+    try {
+      await api.archiveInbox(id);
+      useInboxStore.getState().archive(id);
+      // If archived item was selected, clear selection
+      if (selectedId === id) {
+        setSelectedId("");
+      }
+    } catch (err) {
+      toast.error("Failed to archive");
     }
   };
 
@@ -198,8 +223,28 @@ export default function InboxPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading...
+      <div className="flex h-full">
+        <div className="w-80 shrink-0 border-r">
+          <div className="flex h-12 items-center border-b px-4">
+            <Skeleton className="h-5 w-16" />
+          </div>
+          <div className="space-y-1 p-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-start gap-3 px-4 py-3">
+                <Skeleton className="h-4 w-4 shrink-0 rounded" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 p-6">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="mt-4 h-4 w-32" />
+          <Skeleton className="mt-6 h-24 w-full" />
+        </div>
       </div>
     );
   }
@@ -237,7 +282,7 @@ export default function InboxPage() {
       {/* Right column — detail */}
       <div className="flex-1 overflow-y-auto">
         {selected ? (
-          <InboxDetail item={selected} onMarkRead={handleMarkRead} />
+          <InboxDetail item={selected} onMarkRead={handleMarkRead} onArchive={handleArchive} />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             {items.length === 0
