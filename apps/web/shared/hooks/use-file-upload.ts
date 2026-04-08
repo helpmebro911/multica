@@ -22,7 +22,7 @@ export function useFileUpload() {
 
   const upload = useCallback(
     async (file: File, ctx?: UploadContext): Promise<UploadResult | null> => {
-      if (!isAllowedFileType(file.type)) {
+      if (!isAllowedFileType(file.type, file.name)) {
         throw new Error(
           `Unsupported file type: ${file.type || file.name.split(".").pop()}`,
         );

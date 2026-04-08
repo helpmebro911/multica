@@ -1,6 +1,8 @@
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { toast } from "sonner";
 import type { UploadResult } from "@/shared/hooks/use-file-upload";
+import { isAllowedFileType } from "@/shared/constants/upload";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function removeImageBySrc(editor: any, src: string) {
@@ -88,6 +90,10 @@ export function createFileUploadExtension(
         const handler = onUploadFileRef.current;
         if (!handler) return false;
         for (const file of Array.from(files)) {
+          if (!isAllowedFileType(file.type, file.name)) {
+            toast.error(`Unsupported file type: ${file.name}`);
+            continue;
+          }
           await uploadAndInsertFile(editor, file, handler);
         }
         return true;

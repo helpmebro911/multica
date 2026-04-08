@@ -52,6 +52,25 @@ describe("upload constants", () => {
     expect(isAllowedFileType("Text/Plain")).toBe(true);
   });
 
+  it("rejects empty MIME type without filename", () => {
+    expect(isAllowedFileType("")).toBe(false);
+  });
+
+  it("falls back to extension when MIME type is empty", () => {
+    expect(isAllowedFileType("", "main.go")).toBe(true);
+    expect(isAllowedFileType("", "lib.rs")).toBe(true);
+    expect(isAllowedFileType("", "config.toml")).toBe(true);
+    expect(isAllowedFileType("", "data.yaml")).toBe(true);
+    expect(isAllowedFileType("", "script.py")).toBe(true);
+    expect(isAllowedFileType("", "notes.md")).toBe(true);
+  });
+
+  it("rejects unknown extension even with fallback", () => {
+    expect(isAllowedFileType("", "video.mp4")).toBe(false);
+    expect(isAllowedFileType("", "archive.zip")).toBe(false);
+    expect(isAllowedFileType("", "noext")).toBe(false);
+  });
+
   it("exports MAX_FILE_SIZE as 100MB", () => {
     expect(MAX_FILE_SIZE).toBe(100 * 1024 * 1024);
   });

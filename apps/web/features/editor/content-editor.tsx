@@ -30,6 +30,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     },
     ref,
   ) {
+    const [dragOver, setDragOver] = useState(false);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
     const onUpdateRef = useRef(onUpdate);
     const onSubmitRef = useRef(onSubmit);
@@ -195,7 +197,31 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
 
     if (!editor) return null;
 
-    return <EditorContent editor={editor} />;
+    return (
+      <div
+        className={cn("relative", dragOver && "editor-drag-over")}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (editable && e.dataTransfer.types.includes("Files"))
+            setDragOver(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node))
+            setDragOver(false);
+        }}
+        onDrop={() => setDragOver(false)}
+      >
+        <EditorContent editor={editor} />
+        {dragOver && (
+          <div className="editor-drop-overlay">
+            <p>Drop files to upload</p>
+          </div>
+        )}
+      </div>
+    );
   },
 );
 

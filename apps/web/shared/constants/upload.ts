@@ -32,45 +32,62 @@ export const ALLOWED_MIME_PATTERNS: readonly string[] = [
 ];
 
 /**
+ * Extra file extensions for the HTML accept attribute.
+ * Needed because browsers don't always map these extensions to MIME types.
+ */
+const EXTRA_EXTENSIONS = [
+  ".md", ".markdown", ".csv", ".json",
+  ".ts", ".tsx", ".js", ".jsx",
+  ".py", ".go", ".rs", ".rb", ".java",
+  ".c", ".cpp", ".h", ".sql",
+  ".yaml", ".yml", ".toml", ".xml", ".sh",
+  ".ipynb",
+];
+
+/**
  * HTML accept attribute value for <input type="file">.
- * Must mirror ALLOWED_MIME_PATTERNS for browser-level filtering.
+ * Derived from ALLOWED_MIME_PATTERNS + extra extensions.
  */
 export const FILE_INPUT_ACCEPT = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-  "application/pdf",
-  "text/*",
-  "application/json",
-  ".md",
-  ".markdown",
-  ".json",
-  ".csv",
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".py",
-  ".go",
-  ".rs",
-  ".rb",
-  ".java",
-  ".c",
-  ".cpp",
-  ".h",
-  ".sql",
-  ".yaml",
-  ".yml",
-  ".toml",
-  ".xml",
-  ".sh",
-  ".ipynb",
+  ...ALLOWED_MIME_PATTERNS,
+  ...EXTRA_EXTENSIONS,
 ].join(",");
 
-/** Check if a MIME type matches our allowed patterns. */
-export function isAllowedFileType(mimeType: string): boolean {
+/**
+ * Extension-to-MIME fallback for files where `file.type` is empty.
+ * Browsers often report "" for .go, .rs, .toml, .yaml, etc.
+ */
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".txt": "text/plain",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".xml": "text/xml",
+  ".svg": "image/svg+xml",
+  ".ts": "text/x-typescript",
+  ".tsx": "text/x-typescript",
+  ".js": "text/javascript",
+  ".jsx": "text/javascript",
+  ".py": "text/x-python",
+  ".go": "text/x-go",
+  ".rs": "text/x-rust",
+  ".rb": "text/x-ruby",
+  ".java": "text/x-java",
+  ".c": "text/x-c",
+  ".cpp": "text/x-c++",
+  ".h": "text/x-c",
+  ".sql": "text/x-sql",
+  ".yaml": "text/yaml",
+  ".yml": "text/yaml",
+  ".toml": "text/x-toml",
+  ".sh": "text/x-sh",
+  ".ipynb": "application/json",
+};
+
+function matchesMimePattern(mimeType: string): boolean {
   const ct = mimeType.toLowerCase();
   return ALLOWED_MIME_PATTERNS.some((pattern) => {
     if (pattern.endsWith("/*")) {
@@ -78,4 +95,24 @@ export function isAllowedFileType(mimeType: string): boolean {
     }
     return ct === pattern;
   });
+}
+
+/**
+ * Check if a file is an allowed upload type.
+ * Uses MIME type when available, falls back to extension for files
+ * where the browser reports an empty type (e.g. .go, .rs, .toml).
+ */
+export function isAllowedFileType(mimeType: string, filename?: string): boolean {
+  if (mimeType && matchesMimePattern(mimeType)) return true;
+
+  // Fallback: infer MIME from extension when browser reports empty type
+  if (filename) {
+    const ext = filename.lastIndexOf(".") >= 0
+      ? filename.slice(filename.lastIndexOf(".")).toLowerCase()
+      : "";
+    const inferred = EXTENSION_MIME_MAP[ext];
+    if (inferred && matchesMimePattern(inferred)) return true;
+  }
+
+  return false;
 }
