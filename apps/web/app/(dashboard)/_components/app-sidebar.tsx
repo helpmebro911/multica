@@ -64,6 +64,9 @@ const workspaceNav = [
   { href: "/issues", label: "Issues", icon: ListTodo },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/agents", label: "Agents", icon: Bot },
+];
+
+const configureNav = [
   { href: "/runtimes", label: "Runtimes", icon: Monitor },
   { href: "/skills", label: "Skills", icon: BookOpenText },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -235,6 +238,29 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
                 {workspaceNav.map((item) => {
+                  const isActive = pathname === item.href;
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        isActive={isActive}
+                        render={<Link href={item.href} />}
+                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                      >
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>Configure</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu className="gap-0.5">
+                {configureNav.map((item) => {
                   const isActive = pathname === item.href;
                   return (
                     <SidebarMenuItem key={item.href}>
