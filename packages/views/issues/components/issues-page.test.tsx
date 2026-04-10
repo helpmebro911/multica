@@ -131,6 +131,9 @@ const mockViewState = {
 
 vi.mock("@multica/core/issues/stores/view-store", () => ({
   initFilterWorkspaceSync: vi.fn(),
+  registerViewStoreForWorkspaceSync: vi.fn(),
+  viewStorePersistOptions: () => ({ name: "test", storage: undefined, partialize: (s: any) => s }),
+  viewStoreSlice: vi.fn(),
   useIssueViewStore: Object.assign(
     (selector?: any) => (selector ? selector(mockViewState) : mockViewState),
     { getState: () => mockViewState, setState: vi.fn() },
@@ -178,6 +181,16 @@ vi.mock("@multica/core/issues/stores/selection-store", () => ({
       return selector ? selector(state) : state;
     },
     { getState: () => ({ selectedIds: new Set(), toggle: vi.fn(), clear: vi.fn(), setAll: vi.fn() }) },
+  ),
+}));
+
+vi.mock("@multica/core/issues/stores/recent-issues-store", () => ({
+  useRecentIssuesStore: Object.assign(
+    (selector?: any) => {
+      const state = { items: [], recordVisit: vi.fn() };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ items: [], recordVisit: vi.fn() }) },
   ),
 }));
 

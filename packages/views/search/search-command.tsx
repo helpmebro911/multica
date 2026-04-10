@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, MessageSquare, SearchIcon } from "lucide-react";
+import { Clock, Loader2, MessageSquare, SearchIcon } from "lucide-react";
 import { Command as CommandPrimitive } from "cmdk";
 import type { SearchIssueResult } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { useRecentIssuesStore } from "@multica/core/issues/stores";
 import { StatusIcon } from "../issues/components";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
 import {
@@ -57,6 +58,7 @@ export function SearchCommand() {
   const { push } = useNavigation();
   const open = useSearchStore((s) => s.open);
   const setOpen = useSearchStore((s) => s.setOpen);
+  const recentIssues = useRecentIssuesStore((s) => s.items);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchIssueResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -228,7 +230,38 @@ export function SearchCommand() {
               </CommandPrimitive.Group>
             )}
 
-            {!isLoading && !query.trim() && (
+            {!isLoading && !query.trim() && recentIssues.length > 0 && (
+              <CommandPrimitive.Group className="p-2">
+                <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                  <Clock className="size-3" />
+                  <span>Recent</span>
+                </div>
+                {recentIssues.map((item) => (
+                  <CommandPrimitive.Item
+                    key={item.id}
+                    value={item.id}
+                    onSelect={handleSelect}
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                  >
+                    <StatusIcon
+                      status={item.status}
+                      className="size-4 shrink-0"
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {item.identifier}
+                    </span>
+                    <span className="truncate">{item.title}</span>
+                    <span
+                      className={`ml-auto text-xs shrink-0 ${STATUS_CONFIG[item.status]?.iconColor ?? ""}`}
+                    >
+                      {STATUS_CONFIG[item.status]?.label ?? ""}
+                    </span>
+                  </CommandPrimitive.Item>
+                ))}
+              </CommandPrimitive.Group>
+            )}
+
+            {!isLoading && !query.trim() && recentIssues.length === 0 && (
               <div className="flex flex-col items-center gap-2 py-10 text-sm text-muted-foreground">
                 <span>Type to search issues...</span>
                 <span className="text-xs">Press <kbd className="rounded bg-muted px-1.5 py-0.5 font-medium">⌘K</kbd> to open this anytime</span>
