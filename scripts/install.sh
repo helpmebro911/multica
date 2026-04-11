@@ -242,6 +242,16 @@ configure_local() {
 }
 
 # ---------------------------------------------------------------------------
+# Configure CLI for Multica Cloud
+# ---------------------------------------------------------------------------
+configure_cloud() {
+  info "Configuring CLI for Multica Cloud..."
+  multica config set server_url https://api.multica.ai 2>/dev/null || true
+  multica config set app_url https://multica.ai 2>/dev/null || true
+  ok "CLI configured for multica.ai"
+}
+
+# ---------------------------------------------------------------------------
 # Main: Default mode (cloud — install CLI to connect to multica.ai)
 # ---------------------------------------------------------------------------
 run_default() {
@@ -252,6 +262,7 @@ run_default() {
 
   detect_os
   install_cli
+  configure_cloud
 
   printf "\n"
   printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"

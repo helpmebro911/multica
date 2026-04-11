@@ -55,6 +55,13 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  server_url: %s\n", cfg.ServerURL)
 	} else if !forceLocal {
 		fmt.Fprintln(os.Stderr, "No local server detected — using Multica Cloud (https://multica.ai).")
+
+		cfg, _ := cli.LoadCLIConfigForProfile(profile)
+		cfg.AppURL = "https://multica.ai"
+		cfg.ServerURL = "https://api.multica.ai"
+		if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
 	}
 
 	// Authenticate.
