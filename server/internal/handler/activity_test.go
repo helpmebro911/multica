@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -203,6 +204,130 @@ func TestCreateComment_WithParentID(t *testing.T) {
 	// Verify parent comment has no parent_id
 	if parentComment.ParentID != nil {
 		t.Fatalf("expected parent comment to have nil parent_id, got %q", *parentComment.ParentID)
+	}
+}
+
+func TestCreateComment_AgentWithWrongParentRejected(t *testing.T) {
+	ctx := context.Background()
+
+	// Find the fixture agent + its runtime.
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("find test agent: %v", err)
+	}
+
+	// Create an issue with two member-authored sibling comments. The second
+	// one will be the trigger for the agent task — the first simulates an
+	// earlier comment whose UUID the resumed agent session still remembers.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "agent parent guard test",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: %d: %s", w.Code, w.Body.String())
+	}
+	var issue IssueResponse
+	json.NewDecoder(w.Body).Decode(&issue)
+	issueID := issue.ID
+
+	var staleTaskID, freshTaskID string
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id IN ($1, $2)`, staleTaskID, freshTaskID)
+		testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	postComment := func(t *testing.T, body map[string]any, headers map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := newRequest("POST", "/api/issues/"+issueID+"/comments", body)
+		r = withURLParam(r, "id", issueID)
+		for k, v := range headers {
+			r.Header.Set(k, v)
+		}
+		testHandler.CreateComment(w, r)
+		return w
+	}
+
+	w = postComment(t, map[string]any{"content": "stale comment"}, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create stale parent: %d: %s", w.Code, w.Body.String())
+	}
+	var staleParent CommentResponse
+	json.NewDecoder(w.Body).Decode(&staleParent)
+
+	w = postComment(t, map[string]any{"content": "fresh comment"}, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create fresh parent: %d: %s", w.Code, w.Body.String())
+	}
+	var freshParent CommentResponse
+	json.NewDecoder(w.Body).Decode(&freshParent)
+
+	// Fresh agent task whose trigger is the fresh comment. Any agent reply
+	// routed through this task must use freshParent.ID as --parent.
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id)
+		 VALUES ($1, $2, $3, 'queued', 0, $4) RETURNING id`,
+		agentID, runtimeID, issueID, freshParent.ID,
+	).Scan(&freshTaskID); err != nil {
+		t.Fatalf("insert fresh task: %v", err)
+	}
+
+	// Also create an assignment-style task (no trigger comment) to assert the
+	// guard does NOT fire on assignment-triggered tasks.
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
+		 VALUES ($1, $2, $3, 'queued', 0) RETURNING id`,
+		agentID, runtimeID, issueID,
+	).Scan(&staleTaskID); err != nil {
+		t.Fatalf("insert assignment task: %v", err)
+	}
+
+	agentHeaders := func(taskID string) map[string]string {
+		return map[string]string{"X-Agent-ID": agentID, "X-Task-ID": taskID}
+	}
+
+	// Wrong parent on a comment-triggered task → 409.
+	w = postComment(t,
+		map[string]any{"content": "drifted reply", "parent_id": staleParent.ID},
+		agentHeaders(freshTaskID),
+	)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when agent replies with wrong parent, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), freshParent.ID) {
+		t.Fatalf("expected error body to reference the correct trigger comment id, got %s", w.Body.String())
+	}
+
+	// Missing parent on a comment-triggered task → 409 (must reply to trigger).
+	w = postComment(t,
+		map[string]any{"content": "no parent"},
+		agentHeaders(freshTaskID),
+	)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when agent replies with no parent, got %d", w.Code)
+	}
+
+	// Correct parent → 201.
+	w = postComment(t,
+		map[string]any{"content": "correct reply", "parent_id": freshParent.ID},
+		agentHeaders(freshTaskID),
+	)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 when agent replies with matching parent, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Assignment-triggered task with no trigger_comment_id → any parent accepted.
+	w = postComment(t,
+		map[string]any{"content": "assignment reply", "parent_id": staleParent.ID},
+		agentHeaders(staleTaskID),
+	)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("assignment-triggered agent reply should not be guarded, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
