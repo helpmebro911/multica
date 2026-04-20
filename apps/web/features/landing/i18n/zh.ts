@@ -283,6 +283,23 @@ export const zh: LandingDict = {
     },
     entries: [
       {
+        version: "0.2.7",
+        date: "2026-04-18",
+        title: "编辑器创建子 Issue、自部署门禁与 MCP",
+        changes: [],
+        features: [
+          "直接从编辑器气泡菜单将选中文本创建为子 Issue",
+          "自部署实例账户门禁——`ALLOW_SIGNUP` 和 `ALLOWED_EMAIL_*` 环境变量限制注册",
+          "Agent 新增 `mcp_config` 字段恢复 MCP 支持",
+          "桌面应用每小时检查更新，设置中新增手动检查按钮",
+        ],
+        fixes: [
+          "网页已登录时将会话交接给桌面应用",
+          "修复 `?next=` 开放重定向漏洞",
+          "OpenClaw 停止传递不支持的参数，正确传递 AgentInstructions",
+        ],
+      },
+      {
         version: "0.2.5",
         date: "2026-04-17",
         title: "CLI Autopilot、Cmd+K 与 Daemon 身份",
