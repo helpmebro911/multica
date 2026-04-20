@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -374,4 +375,72 @@ func TestHermesClientIgnoresInvalidJSON(t *testing.T) {
 	c.handleLine("not json at all")
 	c.handleLine("")
 	c.handleLine("{}")
+}
+
+func TestHermesProviderErrorSniffer(t *testing.T) {
+	t.Parallel()
+
+	// Real sample of the stderr hermes emits when the configured
+	// LLM endpoint rejects the requested model. We verify the
+	// sniffer extracts the `Error: ...` line so the task error
+	// tells the user *why* it failed.
+	s := newHermesProviderErrorSniffer()
+	lines := []string{
+		"2026-04-20 23:41:47 [INFO] acp_adapter.server: Prompt on session abc",
+		`⚠️  API call failed (attempt 1/3): BadRequestError [HTTP 400]`,
+		`   🔌 Provider: openai-codex  Model: gpt-5.1-codex-mini`,
+		`   📝 Error: HTTP 400: Error code: 400 - {'detail': "The 'gpt-5.1-codex-mini' model is not supported when using Codex with a ChatGPT account."}`,
+		`⏱️  Elapsed: 1.17s`,
+	}
+	for _, line := range lines {
+		if _, err := s.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	msg := s.message()
+	if msg == "" {
+		t.Fatal("expected a non-empty error message")
+	}
+	if !strings.Contains(msg, "model is not supported") {
+		t.Errorf("expected detail about model support, got %q", msg)
+	}
+}
+
+func TestHermesProviderErrorSnifferIgnoresInfoLines(t *testing.T) {
+	t.Parallel()
+
+	s := newHermesProviderErrorSniffer()
+	s.Write([]byte("2026-04-20 23:41:45 [INFO] acp_adapter.entry: Loaded env\n"))
+	s.Write([]byte("2026-04-20 23:41:47 [INFO] agent.auxiliary_client: Vision auto-detect...\n"))
+	if msg := s.message(); msg != "" {
+		t.Errorf("info lines should produce no error, got %q", msg)
+	}
+}
+
+func TestHermesProviderErrorSnifferHandlesPartialLines(t *testing.T) {
+	t.Parallel()
+
+	// Writer may be called mid-line; the sniffer must buffer until
+	// it sees a newline so the regex doesn't miss the header.
+	s := newHermesProviderErrorSniffer()
+	s.Write([]byte(`⚠️  API call failed (attempt 1/3):`))
+	s.Write([]byte(` BadRequestError [HTTP 400]` + "\n"))
+	s.Write([]byte(`   📝 Error: something went wrong` + "\n"))
+	msg := s.message()
+	if !strings.Contains(msg, "something went wrong") {
+		t.Errorf("expected buffered line to be captured, got %q", msg)
+	}
+}
+
+func TestHermesProviderErrorSnifferBoundedBuffer(t *testing.T) {
+	t.Parallel()
+
+	s := newHermesProviderErrorSniffer()
+	for i := 0; i < 20; i++ {
+		// Each line differs so dedup doesn't merge them.
+		s.Write([]byte(`⚠️  API call failed (HTTP 400) attempt ` + string(rune('a'+i%26)) + `: Non-retryable error` + "\n"))
+	}
+	if len(s.lines) > hermesMaxErrorLines {
+		t.Errorf("sniffer kept %d lines, limit is %d", len(s.lines), hermesMaxErrorLines)
+	}
 }

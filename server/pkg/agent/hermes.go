@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +66,15 @@ func (b *hermesBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("hermes stdin pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[hermes:stderr] ")
+	// Forward stderr to the daemon log *and* sniff provider-level
+	// errors out of it so we can surface them in the task result.
+	// Hermes' session/prompt still reports stopReason=end_turn when
+	// the underlying HTTP call to the LLM returns 4xx/5xx, so
+	// without this we'd report a misleading "empty output" and hide
+	// the real cause (wrong model for the current provider, bad
+	// credentials, rate limit, …) in the daemon log.
+	providerErr := newHermesProviderErrorSniffer()
+	cmd.Stderr = io.MultiWriter(newLogWriter(b.cfg.Logger, "[hermes:stderr] "), providerErr)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -265,6 +275,20 @@ func (b *hermesBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		outputMu.Lock()
 		finalOutput := output.String()
 		outputMu.Unlock()
+
+		// If hermes produced no visible output but we sniffed a
+		// provider-level error on stderr (typically HTTP 4xx from
+		// the configured LLM endpoint), promote the status to
+		// failed and surface the real reason. Without this the
+		// daemon reports a cryptic "hermes returned empty output"
+		// and the actionable error (e.g. "model X not supported
+		// with your ChatGPT account") stays buried in daemon logs.
+		if finalStatus == "completed" && finalOutput == "" {
+			if msg := providerErr.message(); msg != "" {
+				finalStatus = "failed"
+				finalError = msg
+			}
+		}
 
 		// Build usage map.
 		c.usageMu.Lock()
@@ -666,4 +690,99 @@ func hermesToolNameFromTitle(title string, kind string) string {
 	default:
 		return kind
 	}
+}
+
+// ── Provider-error sniffing ──
+//
+// hermes' session/prompt RPC reports stopReason=end_turn even when
+// the underlying HTTP call to the configured LLM endpoint returned
+// an error — the actionable detail only appears on stderr (e.g.
+// `⚠️ API call failed (attempt 1/3): BadRequestError [HTTP 400]` and
+// `Error: HTTP 400: Error code: 400 - {'detail': "The '...' model
+// is not supported when using Codex with a ChatGPT account."}`).
+// We scan for those patterns so the daemon can surface a real
+// failure instead of a generic "empty output".
+type hermesProviderErrorSniffer struct {
+	mu      sync.Mutex
+	remains []byte       // buffer for a partial trailing line across writes
+	lines   []string     // captured error lines, bounded
+	seen    map[string]bool
+}
+
+// hermesErrorHeaderRe matches the first line of an API-error block.
+// Hermes prefixes these with ⚠️ / ❌ and includes an HTTP status
+// code or a non-retryable-error tag.
+var hermesErrorHeaderRe = regexp.MustCompile(`(?:⚠️|❌|\[ERROR\]).*(?:BadRequestError|AuthenticationError|RateLimitError|HTTP [0-9]{3}|Non-retryable|API call failed)`)
+
+// hermesErrorDetailRe pulls the most useful single-line messages
+// out of the subsequent lines of the error block (the one whose
+// "Error:" or "Details:" tag actually spells out what happened).
+var hermesErrorDetailRe = regexp.MustCompile(`(?:Error:|detail:|Details:)\s*(.+)`)
+
+const hermesMaxErrorLines = 8
+
+func newHermesProviderErrorSniffer() *hermesProviderErrorSniffer {
+	return &hermesProviderErrorSniffer{seen: map[string]bool{}}
+}
+
+// Write implements io.Writer so the sniffer can sit behind an
+// io.MultiWriter next to the normal stderr log forwarder.
+func (s *hermesProviderErrorSniffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := append(s.remains, p...)
+	// Keep the final partial line (no trailing newline) for the
+	// next write so multi-line error blocks aren't split.
+	nl := strings.LastIndexByte(string(data), '\n')
+	var complete string
+	if nl < 0 {
+		s.remains = append(s.remains[:0], data...)
+		return len(p), nil
+	}
+	complete = string(data[:nl])
+	s.remains = append(s.remains[:0], data[nl+1:]...)
+
+	for _, line := range strings.Split(complete, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !(hermesErrorHeaderRe.MatchString(line) || hermesErrorDetailRe.MatchString(line)) {
+			continue
+		}
+		if s.seen[line] {
+			continue
+		}
+		s.seen[line] = true
+		s.lines = append(s.lines, line)
+		if len(s.lines) > hermesMaxErrorLines {
+			s.lines = s.lines[len(s.lines)-hermesMaxErrorLines:]
+		}
+	}
+	return len(p), nil
+}
+
+// message returns a single-line summary suitable for the task
+// error field. Prefers the most specific "Error:" / "detail:"
+// fragment; falls back to the first captured header line; empty
+// when nothing useful was seen.
+func (s *hermesProviderErrorSniffer) message() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, line := range s.lines {
+		if m := hermesErrorDetailRe.FindStringSubmatch(line); m != nil {
+			detail := strings.TrimSpace(m[1])
+			if detail != "" {
+				return "hermes provider error: " + detail
+			}
+		}
+	}
+	for _, line := range s.lines {
+		if hermesErrorHeaderRe.MatchString(line) {
+			return "hermes provider error: " + line
+		}
+	}
+	return ""
 }
