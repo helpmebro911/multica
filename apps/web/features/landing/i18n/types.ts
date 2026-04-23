@@ -86,6 +86,7 @@ export type LandingDict = {
   changelog: {
     title: string;
     subtitle: string;
+    toc: string;
     categories: {
       features: string;
       improvements: string;
