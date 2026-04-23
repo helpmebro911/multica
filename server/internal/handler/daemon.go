@@ -529,12 +529,16 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for pending local-skill list requests for this runtime.
-	if pending := h.LocalSkillListStore.PopPending(req.RuntimeID); pending != nil {
+	if pending, err := h.LocalSkillListStore.PopPending(r.Context(), req.RuntimeID); err != nil {
+		slog.Warn("local skill list PopPending failed", "error", err, "runtime_id", req.RuntimeID)
+	} else if pending != nil {
 		resp["pending_local_skills"] = map[string]string{"id": pending.ID}
 	}
 
 	// Check for pending local-skill import requests for this runtime.
-	if pending := h.LocalSkillImportStore.PopPending(req.RuntimeID); pending != nil {
+	if pending, err := h.LocalSkillImportStore.PopPending(r.Context(), req.RuntimeID); err != nil {
+		slog.Warn("local skill import PopPending failed", "error", err, "runtime_id", req.RuntimeID)
+	} else if pending != nil {
 		payload := map[string]string{
 			"id":        pending.ID,
 			"skill_key": pending.SkillKey,

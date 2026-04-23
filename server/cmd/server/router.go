@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -55,7 +56,11 @@ func allowedOrigins() []string {
 }
 
 // NewRouter creates the fully-configured Chi router with all middleware and routes.
-func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client) chi.Router {
+// rdb is optional: when non-nil the runtime local-skill request stores are
+// swapped for Redis-backed implementations so multiple API nodes share the
+// same pending queue (required for multi-node prod). A nil rdb keeps the
+// default in-memory stores which are fine for single-node dev and tests.
+func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, rdb *redis.Client) chi.Router {
 	queries := db.New(pool)
 	emailSvc := service.NewEmailService()
 
@@ -79,6 +84,10 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 		AllowedEmailDomains: splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig)
+	if rdb != nil {
+		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
+		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
+	}
 
 	r := chi.NewRouter()
 

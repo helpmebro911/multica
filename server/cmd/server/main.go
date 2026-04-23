@@ -62,15 +62,18 @@ func main() {
 	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
 	// multiple API nodes can deliver each other's events. Without it the hub
 	// is the sole broadcaster and the server stays single-node (legacy).
+	// The same client is also used for cross-node request stores (e.g. runtime
+	// local-skill pending requests) so every node sees the same pending set.
 	relayCtx, relayCancel := context.WithCancel(context.Background())
 	defer relayCancel()
 	var broadcaster realtime.Broadcaster = hub
+	var rdb *redis.Client
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		opts, err := redis.ParseURL(redisURL)
 		if err != nil {
 			slog.Error("invalid REDIS_URL — falling back to in-memory hub", "error", err)
 		} else {
-			rdb := redis.NewClient(opts)
+			rdb = redis.NewClient(opts)
 			relay := realtime.NewRedisRelay(hub, rdb)
 			relay.Start(relayCtx)
 			broadcaster = relay
@@ -93,7 +96,7 @@ func main() {
 	registerActivityListeners(bus, queries)
 	registerNotificationListeners(bus, queries)
 
-	r := NewRouter(pool, hub, bus, analyticsClient)
+	r := NewRouter(pool, hub, bus, analyticsClient, rdb)
 
 	srv := &http.Server{
 		Addr:    ":" + port,

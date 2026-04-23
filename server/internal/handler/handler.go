@@ -50,8 +50,8 @@ type Handler struct {
 	PingStore             *PingStore
 	UpdateStore           *UpdateStore
 	ModelListStore        *ModelListStore
-	LocalSkillListStore   *RuntimeLocalSkillListStore
-	LocalSkillImportStore *RuntimeLocalSkillImportStore
+	LocalSkillListStore   LocalSkillListStore
+	LocalSkillImportStore LocalSkillImportStore
 	Storage               storage.Storage
 	CFSigner              *auth.CloudFrontSigner
 	Analytics             analytics.Client
@@ -81,8 +81,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		PingStore:             NewPingStore(),
 		UpdateStore:           NewUpdateStore(),
 		ModelListStore:        NewModelListStore(),
-		LocalSkillListStore:   NewRuntimeLocalSkillListStore(),
-		LocalSkillImportStore: NewRuntimeLocalSkillImportStore(),
+		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
 		Storage:               store,
 		CFSigner:              cfSigner,
 		Analytics:             analyticsClient,
