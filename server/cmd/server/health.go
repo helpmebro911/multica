@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +16,8 @@ import (
 
 const readinessQuery = `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`
 
+const readinessCacheTTL = 2 * time.Second
+
 type readinessDB interface {
 	Ping(ctx context.Context) error
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -23,6 +27,15 @@ type serverHealth struct {
 	db              readinessDB
 	latestMigration string
 	initErr         error
+	cacheTTL        time.Duration
+	refreshMu       sync.Mutex
+	cache           atomic.Pointer[cachedReadiness]
+}
+
+type cachedReadiness struct {
+	response   readinessResponse
+	statusCode int
+	expiresAt  time.Time
 }
 
 type liveResponse struct {
@@ -45,6 +58,7 @@ func newServerHealth(pool *pgxpool.Pool) *serverHealth {
 		db:              pool,
 		latestMigration: latestMigration,
 		initErr:         err,
+		cacheTTL:        readinessCacheTTL,
 	}
 }
 
@@ -58,6 +72,41 @@ func (h *serverHealth) readyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *serverHealth) readiness(parent context.Context) (readinessResponse, int) {
+	if h.cacheTTL <= 0 {
+		return h.computeReadiness(parent)
+	}
+
+	now := time.Now()
+	if cached := h.loadCachedReadiness(now); cached != nil {
+		return cached.response, cached.statusCode
+	}
+
+	h.refreshMu.Lock()
+	defer h.refreshMu.Unlock()
+
+	now = time.Now()
+	if cached := h.loadCachedReadiness(now); cached != nil {
+		return cached.response, cached.statusCode
+	}
+
+	resp, status := h.computeReadiness(parent)
+	h.cache.Store(&cachedReadiness{
+		response:   resp,
+		statusCode: status,
+		expiresAt:  now.Add(h.cacheTTL),
+	})
+	return resp, status
+}
+
+func (h *serverHealth) loadCachedReadiness(now time.Time) *cachedReadiness {
+	cached := h.cache.Load()
+	if cached == nil || !now.Before(cached.expiresAt) {
+		return nil
+	}
+	return cached
+}
+
+func (h *serverHealth) computeReadiness(parent context.Context) (readinessResponse, int) {
 	resp := readinessResponse{
 		Status: "ok",
 		Checks: readinessChecks{

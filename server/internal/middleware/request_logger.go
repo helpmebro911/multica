@@ -12,9 +12,8 @@ import (
 // It replaces Chi's built-in chimw.Logger with colored, structured output.
 func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip noisy endpoints.
-		switch r.URL.Path {
-		case "/health", "/readyz", "/healthz":
+		// Skip the hot liveness endpoint to keep logs readable.
+		if r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
